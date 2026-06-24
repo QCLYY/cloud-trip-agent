@@ -201,10 +201,18 @@ def _get_chroma_collection():
     """获取 Chroma collection。"""
     try:
         import chromadb
+        from chromadb.config import Settings
     except ImportError:
         return None
 
-    client = chromadb.PersistentClient(path=str(CHROMA_DB_DIR))
+    client = chromadb.PersistentClient(
+        path=str(CHROMA_DB_DIR),
+        settings=Settings(
+            anonymized_telemetry=False,
+            chroma_product_telemetry_impl="app.rag.chroma_telemetry.NoopProductTelemetry",
+            chroma_telemetry_impl="app.rag.chroma_telemetry.NoopProductTelemetry",
+        ),
+    )
     return client.get_or_create_collection(
         name=CHROMA_COLLECTION_NAME,
         metadata={"hnsw:space": "cosine"},

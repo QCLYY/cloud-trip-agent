@@ -1,0 +1,12 @@
+from __future__ import annotations
+
+from chromadb.telemetry.product import ProductTelemetryClient, ProductTelemetryEvent
+from overrides import override
+
+
+class NoopProductTelemetry(ProductTelemetryClient):
+    """Disable Chroma product telemetry without changing vector DB behavior."""
+
+    @override
+    def capture(self, event: ProductTelemetryEvent) -> None:
+        return None

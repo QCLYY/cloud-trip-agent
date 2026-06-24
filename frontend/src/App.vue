@@ -1,27 +1,64 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
+import { RouterView, useRoute, useRouter } from "vue-router";
 
+import { useAuthStore } from "./stores/auth";
 import type { Itinerary } from "./types";
-import History from "./views/History.vue";
-import Home from "./views/Home.vue";
-import Result from "./views/Result.vue";
 
-const currentView = ref<"home" | "result" | "history">("home");
+
+const route = useRoute();
+const router = useRouter();
+const authStore = useAuthStore();
+
 const latestItinerary = ref<Itinerary | null>(null);
+
+const currentRouteName = computed(() => String(route.name || ""));
+const resultRouteNames = ["result", "sources", "agentStatus"];
+const isResultRoute = computed(() => resultRouteNames.includes(currentRouteName.value));
+const resultMode = computed(() => {
+  if (currentRouteName.value === "sources") {
+    return "sources";
+  }
+  if (currentRouteName.value === "agentStatus") {
+    return "agent-status";
+  }
+  return "result";
+});
+const isAuthPage = computed(() => {
+  return currentRouteName.value === "login" || currentRouteName.value === "register";
+});
+
+
+function goToRoute(name: "home" | "result" | "sources" | "agentStatus" | "history" | "memory") {
+  if (resultRouteNames.includes(name) && !latestItinerary.value) {
+    return;
+  }
+  void router.push({ name });
+}
+
 
 function handleGenerated(itinerary: Itinerary) {
   latestItinerary.value = itinerary;
-  currentView.value = "result";
+  void router.push({ name: "result" });
 }
+
 
 function openTrip(itinerary: Itinerary) {
   latestItinerary.value = itinerary;
-  currentView.value = "result";
+  void router.push({ name: "result" });
 }
+
 
 function updateCurrentItinerary(itinerary: Itinerary) {
   latestItinerary.value = itinerary;
-  currentView.value = "result";
+  void router.push({ name: "result" });
+}
+
+
+function handleLogout() {
+  authStore.logout();
+  latestItinerary.value = null;
+  void router.replace({ name: "login" });
 }
 </script>
 
@@ -30,54 +67,103 @@ function updateCurrentItinerary(itinerary: Itinerary) {
     <div class="app-shell__glow app-shell__glow--left"></div>
     <div class="app-shell__glow app-shell__glow--right"></div>
 
-    <header class="hero">
-      <div class="hero__badge">Trip Planner Demo</div>
-      <h1 class="hero__title">智能旅行助手</h1>
+    <header v-if="!isAuthPage" class="hero">
+      <div class="hero__topline">
+        <div class="hero__badge">Cloud Trip Agent</div>
+        <div class="hero__user">
+          <span>{{ authStore.currentUser?.username || "已登录" }}</span>
+          <button type="button" @click="handleLogout">退出登录</button>
+        </div>
+      </div>
+
+      <h1 class="hero__title">云程智绘图</h1>
 
       <div class="hero__tabs">
         <button
-          :class="['hero__tab', { 'hero__tab--active': currentView === 'home' }]"
-          @click="currentView = 'home'"
+          :class="['hero__tab', { 'hero__tab--active': currentRouteName === 'home' }]"
+          type="button"
+          @click="goToRoute('home')"
         >
-          规划页
+          新建行程
         </button>
         <button
           :class="[
             'hero__tab',
-            { 'hero__tab--active': currentView === 'result' },
+            { 'hero__tab--active': currentRouteName === 'result' },
             { 'hero__tab--disabled': !latestItinerary }
           ]"
           :disabled="!latestItinerary"
-          @click="currentView = 'result'"
+          type="button"
+          @click="goToRoute('result')"
         >
-          结果页
+          当前结果
         </button>
         <button
-          :class="['hero__tab', { 'hero__tab--active': currentView === 'history' }]"
-          @click="currentView = 'history'"
+          :class="[
+            'hero__tab',
+            { 'hero__tab--active': currentRouteName === 'sources' },
+            { 'hero__tab--disabled': !latestItinerary }
+          ]"
+          :disabled="!latestItinerary"
+          type="button"
+          @click="goToRoute('sources')"
         >
-          历史列表
+          数据来源
+        </button>
+        <button
+          :class="[
+            'hero__tab',
+            { 'hero__tab--active': currentRouteName === 'agentStatus' },
+            { 'hero__tab--disabled': !latestItinerary }
+          ]"
+          :disabled="!latestItinerary"
+          type="button"
+          @click="goToRoute('agentStatus')"
+        >
+          Agent状态
+        </button>
+        <button
+          :class="['hero__tab', { 'hero__tab--active': currentRouteName === 'history' }]"
+          type="button"
+          @click="goToRoute('history')"
+        >
+          历史行程
+        </button>
+        <button
+          :class="['hero__tab', { 'hero__tab--active': currentRouteName === 'memory' }]"
+          type="button"
+          @click="goToRoute('memory')"
+        >
+          长期记忆
         </button>
       </div>
     </header>
 
-    <main class="page-content">
-      <Home
-        v-if="currentView === 'home'"
-        @generated="handleGenerated"
-      />
-      <Result
-        v-else-if="currentView === 'result'"
-        :itinerary="latestItinerary"
-        @back-home="currentView = 'home'"
-        @view-history="currentView = 'history'"
-        @updated="updateCurrentItinerary"
-      />
-      <History
-        v-else
-        :active="currentView === 'history'"
-        @open-trip="openTrip"
-      />
+    <main :class="['page-content', { 'page-content--auth': isAuthPage }]">
+      <RouterView v-slot="{ Component }">
+        <component
+          :is="Component"
+          v-if="currentRouteName === 'home'"
+          @generated="handleGenerated"
+        />
+        <component
+          :is="Component"
+          v-else-if="isResultRoute"
+          :itinerary="latestItinerary"
+          :mode="resultMode"
+          @back-home="goToRoute('home')"
+          @view-history="goToRoute('history')"
+          @updated="updateCurrentItinerary"
+        />
+        <component
+          :is="Component"
+          v-else-if="currentRouteName === 'history'"
+          :active="currentRouteName === 'history'"
+          @open-trip="openTrip"
+        />
+        <component :is="Component" v-else-if="currentRouteName === 'memory'" />
+        <component :is="Component" v-else />
+      </RouterView>
     </main>
   </div>
 </template>
@@ -135,6 +221,13 @@ function updateCurrentItinerary(itinerary: Itinerary) {
   text-align: center;
 }
 
+.hero__topline {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
 .hero__badge {
   display: inline-flex;
   align-items: center;
@@ -143,9 +236,31 @@ function updateCurrentItinerary(itinerary: Itinerary) {
   background: rgba(255, 255, 255, 0.72);
   color: #5c6ac4;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 0.04em;
   box-shadow: 0 12px 30px rgba(98, 116, 164, 0.1);
+}
+
+.hero__user {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px 7px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #4b5563;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.hero__user button {
+  border: none;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(109, 130, 222, 0.12);
+  color: #5b5bd6;
+  font-weight: 800;
+  cursor: pointer;
 }
 
 .hero__title {
@@ -183,7 +298,7 @@ function updateCurrentItinerary(itinerary: Itinerary) {
   background: transparent;
   color: rgba(255, 255, 255, 0.85);
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 700;
   cursor: pointer;
 }
 
@@ -204,9 +319,23 @@ function updateCurrentItinerary(itinerary: Itinerary) {
   margin: 0 auto;
 }
 
+.page-content--auth {
+  max-width: none;
+}
+
 @media (max-width: 768px) {
   .app-shell {
     padding: 24px 16px 40px;
+  }
+
+  .hero__topline {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .hero__user,
+  .hero__badge {
+    justify-content: center;
   }
 
   .hero__title {
@@ -215,7 +344,13 @@ function updateCurrentItinerary(itinerary: Itinerary) {
 
   .hero::before {
     inset: -20px 0 auto;
-    height: 230px;
+    height: 245px;
+  }
+
+  .hero__tabs {
+    width: 100%;
+    justify-content: center;
+    flex-wrap: wrap;
   }
 }
 </style>

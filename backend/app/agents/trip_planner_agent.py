@@ -245,15 +245,17 @@ JSON 结构示例：
 
     json_text = _extract_json_object(str(raw_text))
     if json_text is None:
-        print("[trip_planner_agent] 未能从模型返回中提取 JSON。")
-        print(f"[trip_planner_agent] 原始返回预览: {str(raw_text)[:300]}")
+        print(
+            "[trip_planner_agent] 未能从模型返回中提取 JSON。"
+            f"response_length={len(str(raw_text))}"
+        )
         return None, token_usage
 
     try:
         result = PlannerDraft.model_validate(json.loads(json_text))
     except Exception as exc:
         print(f"[trip_planner_agent] JSON 解析失败: {type(exc).__name__}: {exc}")
-        print(f"[trip_planner_agent] 原始返回预览: {str(raw_text)[:300]}")
+        print(f"[trip_planner_agent] 已跳过模型原始返回日志。response_length={len(str(raw_text))}")
         return None, token_usage
 
     if len(result.days) != day_count:
@@ -355,8 +357,10 @@ JSON 结构示例：
 
     json_text = _extract_json_object(str(raw_text))
     if json_text is None:
-        print("[trip_planner_agent] 未能从单日编辑结果中提取 JSON。")
-        print(f"[trip_planner_agent] 原始返回预览: {str(raw_text)[:300]}")
+        print(
+            "[trip_planner_agent] 未能从单日编辑结果中提取 JSON。"
+            f"response_length={len(str(raw_text))}"
+        )
         return None, token_usage
 
     try:
@@ -367,5 +371,5 @@ JSON 结构示例：
         return DayEditDraft.model_validate(normalized_payload), token_usage
     except Exception as exc:
         print(f"[trip_planner_agent] 单日编辑 JSON 解析失败: {type(exc).__name__}: {exc}")
-        print(f"[trip_planner_agent] 原始返回预览: {str(raw_text)[:300]}")
+        print(f"[trip_planner_agent] 已跳过模型原始返回日志。response_length={len(str(raw_text))}")
         return None, token_usage

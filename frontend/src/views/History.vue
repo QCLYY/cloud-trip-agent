@@ -2,8 +2,16 @@
 import { message } from "ant-design-vue";
 import { onMounted, ref, watch } from "vue";
 
-import { deleteTrip, getTripDetail, listTrips } from "../services/api";
-import type { Itinerary, TripSummaryItem } from "../types";
+import {
+  createConfirmation,
+  deleteTrip,
+  getTripDetail,
+  listTripVersions,
+  listTrips,
+  restoreTripVersion,
+  updateConfirmation,
+} from "../services/api";
+import type { Itinerary, TripSummaryItem, TripVersionSummary } from "../types";
 
 const props = defineProps<{
   active: boolean;
@@ -16,6 +24,8 @@ const emit = defineEmits<{
 const loading = ref(false);
 const items = ref<TripSummaryItem[]>([]);
 const deletingTripId = ref("");
+const versionsByTripId = ref<Record<string, TripVersionSummary[]>>({});
+const versionLoadingTripId = ref("");
 
 async function loadTrips() {
   loading.value = true;
@@ -57,6 +67,50 @@ async function removeTrip(tripId: string) {
     message.error("删除行程失败。");
   } finally {
     deletingTripId.value = "";
+  }
+}
+
+async function toggleVersions(tripId: string) {
+  if (versionsByTripId.value[tripId]) {
+    const next = { ...versionsByTripId.value };
+    delete next[tripId];
+    versionsByTripId.value = next;
+    return;
+  }
+
+  versionLoadingTripId.value = tripId;
+  try {
+    const response = await listTripVersions(tripId);
+    versionsByTripId.value = {
+      ...versionsByTripId.value,
+      [tripId]: response.items,
+    };
+  } catch (error) {
+    console.error(error);
+    message.error("版本列表加载失败。");
+  } finally {
+    versionLoadingTripId.value = "";
+  }
+}
+
+async function restoreVersion(tripId: string, versionNumber: number) {
+  const confirmed = window.confirm(`确定恢复到版本 ${versionNumber} 吗？恢复会生成一个新的当前版本。`);
+  if (!confirmed) {
+    return;
+  }
+  try {
+    const confirmation = await createConfirmation({
+      trip_id: tripId,
+      confirmation_type: "restore_version",
+      payload: { version_number: versionNumber },
+    });
+    await updateConfirmation(confirmation.id, "confirmed");
+    const response = await restoreTripVersion(tripId, versionNumber);
+    emit("openTrip", response.itinerary);
+    message.success(`已恢复版本 ${versionNumber}，并生成新版本 ${response.new_version_number}。`);
+  } catch (error) {
+    console.error(error);
+    message.error("恢复版本失败。");
   }
 }
 
@@ -105,6 +159,9 @@ watch(
           <button class="history-card__button" @click="openTrip(item.trip_id)">
             查看详情
           </button>
+          <button class="history-card__button" @click="toggleVersions(item.trip_id)">
+            {{ versionsByTripId[item.trip_id] ? "收起版本" : "查看版本" }}
+          </button>
           <button
             class="history-card__button history-card__button--danger"
             :disabled="deletingTripId === item.trip_id"
@@ -112,6 +169,25 @@ watch(
           >
             {{ deletingTripId === item.trip_id ? "删除中..." : "删除行程" }}
           </button>
+        </div>
+        <div v-if="versionLoadingTripId === item.trip_id" class="version-state">
+          正在加载版本...
+        </div>
+        <div v-if="versionsByTripId[item.trip_id]" class="version-list">
+          <article
+            v-for="version in versionsByTripId[item.trip_id]"
+            :key="version.version_number"
+            class="version-item"
+          >
+            <div>
+              <strong>V{{ version.version_number }}</strong>
+              <span> / {{ version.change_type }}</span>
+              <p>{{ version.summary }}</p>
+            </div>
+            <button class="history-card__button" @click="restoreVersion(item.trip_id, version.version_number)">
+              恢复
+            </button>
+          </article>
         </div>
       </article>
     </div>
@@ -159,7 +235,7 @@ watch(
 
 .history-card__actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -218,5 +294,32 @@ watch(
 .history-card__time {
   color: #667085;
   font-size: 13px;
+}
+
+.version-state {
+  color: #667085;
+  font-size: 13px;
+}
+
+.version-list {
+  display: grid;
+  gap: 10px;
+}
+
+.version-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border-radius: 14px;
+  background: #f8faff;
+  border: 1px solid rgba(98, 116, 164, 0.08);
+}
+
+.version-item p {
+  margin: 6px 0 0;
+  color: #667085;
+  line-height: 1.5;
 }
 </style>

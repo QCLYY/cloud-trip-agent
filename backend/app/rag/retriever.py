@@ -169,7 +169,7 @@ def _rerank_with_dashscope(
 
     try:
         print(
-            f"[rerank] calling qwen3-rerank: query={query}, "
+            f"[rerank] calling qwen3-rerank: query_length={len(query)}, "
             f"candidate_count={len(clean_chunks)}, top_k={top_k}"
         )
         with httpx.Client(timeout=30) as client:
@@ -183,11 +183,15 @@ def _rerank_with_dashscope(
             )
             print(f"[rerank] qwen3-rerank status_code={response.status_code}")
             if response.status_code != 200:
-                print(f"[rerank] qwen3-rerank response preview={response.text[:500]}")
+                print(
+                    "[rerank] qwen3-rerank non-200 response: "
+                    f"status_code={response.status_code}, "
+                    f"response_length={len(response.text)}"
+                )
                 logger.warning(
-                    "dashscope rerank HTTP %d: %s",
+                    "dashscope rerank HTTP %d; response_length=%d",
                     response.status_code,
-                    response.text[:500],
+                    len(response.text),
                 )
                 return None, empty_usage
             data = response.json()
@@ -216,11 +220,15 @@ def _rerank_with_dashscope(
         # 兼容两种响应格式
         results = data.get("output", {}).get("results", []) or data.get("results", [])
         if not results:
+            response_length = len(json.dumps(data, ensure_ascii=False))
             print(
                 "[rerank] qwen3-rerank empty results, "
-                f"response preview={json.dumps(data, ensure_ascii=False)[:500]}"
+                f"response_length={response_length}"
             )
-            logger.warning("dashscope rerank empty results, response: %s", json.dumps(data, ensure_ascii=False)[:500])
+            logger.warning(
+                "dashscope rerank empty results; response_length=%d",
+                response_length,
+            )
             return None, token_usage
 
         scored = [
@@ -230,12 +238,15 @@ def _rerank_with_dashscope(
         ]
         scored.sort(key=lambda x: x[0], reverse=True)
         print(f"[rerank] qwen3-rerank success: results={len(scored)}")
-        logger.info("dashscope rerank: query=%s, results=%d", query, len(scored))
+        logger.info("dashscope rerank: query_length=%d, results=%d", len(query), len(scored))
         return scored, token_usage
 
     except Exception as exc:
-        print(f"[rerank] qwen3-rerank failed: {type(exc).__name__}: {exc}")
-        logger.warning("dashscope rerank failed: %s, falling back to rule-based", exc)
+        print(f"[rerank] qwen3-rerank failed: {type(exc).__name__}")
+        logger.warning(
+            "dashscope rerank failed: %s, falling back to rule-based",
+            type(exc).__name__,
+        )
         return None, empty_usage
 
 

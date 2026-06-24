@@ -12,7 +12,7 @@ from app.config import (
     AMAP_TIMEOUT_SECONDS,
     REDIS_MAP_TTL_SECONDS,
 )
-from app.models.schemas import HotelItem, Itinerary, SpotItem, TransportItem
+from app.models.schemas import HotelItem, Itinerary, SourceRecord, SourceType, SpotItem, TransportItem
 from app.services.cache_service import get_cached_json, set_cached_json
 
 
@@ -246,6 +246,7 @@ def _enrich_spot(spot: SpotItem, city: str | None = None) -> bool:
         spot.address = geocode.get("formatted_address") or spot.address
         spot.latitude = geocode.get("latitude")
         spot.longitude = geocode.get("longitude")
+        spot.source_type = SourceType.official_api
         return True
 
     spot.address = place.get("address") or spot.address
@@ -253,6 +254,7 @@ def _enrich_spot(spot: SpotItem, city: str | None = None) -> bool:
     spot.latitude = place.get("latitude")
     spot.longitude = place.get("longitude")
     spot.poi_id = place.get("poi_id") or spot.poi_id
+    spot.source_type = SourceType.official_api
     return True
 
 
@@ -270,11 +272,13 @@ def _enrich_hotel(hotel: HotelItem, city: str | None = None) -> bool:
         hotel.address = geocode.get("formatted_address") or hotel.address
         hotel.latitude = geocode.get("latitude")
         hotel.longitude = geocode.get("longitude")
+        hotel.source_type = SourceType.official_api
         return True
 
     hotel.address = place.get("address") or hotel.address
     hotel.latitude = place.get("latitude")
     hotel.longitude = place.get("longitude")
+    hotel.source_type = SourceType.official_api
     return True
 
 
@@ -324,6 +328,7 @@ def _enrich_transport(transport: TransportItem, city: str | None = None) -> bool
 
     transport.distance_km = route.get("distance_km")
     transport.estimated_minutes = route.get("estimated_minutes")
+    transport.source_type = SourceType.official_api
     if route.get("estimated_minutes") is not None and not transport.duration:
         transport.duration = f"{route['estimated_minutes']} 分钟"
     return True
@@ -359,5 +364,17 @@ def enrich_itinerary_with_map_data(itinerary: Itinerary, city: str | None = None
         note = "已补充高德地图地址、坐标或路线估算信息。"
         if note not in itinerary.source_notes:
             itinerary.source_notes.append(note)
+
+    if enriched_count > 0 and not any(
+        record.title == "Amap official API" for record in itinerary.source_records
+    ):
+        itinerary.source_records.append(
+            SourceRecord(
+                title="Amap official API",
+                summary="POI, geocoding or route distance data was enriched through the configured Amap backend API.",
+                source_type=SourceType.official_api,
+                category="map",
+            )
+        )
 
     return itinerary

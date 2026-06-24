@@ -19,6 +19,32 @@ export interface TripEditPayload {
   preserve_constraints: string[];
 }
 
+export type SourceType = "demo" | "estimate" | "user_input" | "tavily" | "official_api";
+
+export interface SourceRecord {
+  title: string;
+  url?: string | null;
+  summary: string;
+  queried_at: string;
+  source_type: SourceType;
+  category?: string | null;
+}
+
+export interface AgentExecutionEvent {
+  request_id: string;
+  user_id?: number | null;
+  trip_id?: string | null;
+  agent: string;
+  tool?: string | null;
+  status: string;
+  duration_ms: number;
+  retry_count: number;
+  fallback: boolean;
+  error?: string | null;
+  token_usage: Record<string, number>;
+  source_type?: SourceType | null;
+}
+
 export interface SpotItem {
   name: string;
   start_time?: string | null;
@@ -31,6 +57,8 @@ export interface SpotItem {
   latitude?: number | null;
   longitude?: number | null;
   poi_id?: string | null;
+  source_type?: SourceType;
+  cost_source_type?: SourceType;
 }
 
 export interface MealItem {
@@ -38,6 +66,8 @@ export interface MealItem {
   meal_type: string;
   estimated_cost?: number;
   notes?: string | null;
+  source_type?: SourceType;
+  cost_source_type?: SourceType;
 }
 
 export interface HotelItem {
@@ -48,6 +78,8 @@ export interface HotelItem {
   address?: string | null;
   latitude?: number | null;
   longitude?: number | null;
+  source_type?: SourceType;
+  cost_source_type?: SourceType;
 }
 
 export interface TransportItem {
@@ -58,6 +90,8 @@ export interface TransportItem {
   duration?: string | null;
   distance_km?: number | null;
   estimated_minutes?: number | null;
+  source_type?: SourceType;
+  cost_source_type?: SourceType;
 }
 
 export interface DayPlan {
@@ -78,6 +112,18 @@ export interface BudgetBreakdown {
   tickets: number;
   other: number;
   total: number;
+  source_type?: SourceType;
+}
+
+export interface CandidateItinerary {
+  candidate_id: string;
+  title: string;
+  strategy: string;
+  summary: string;
+  days: DayPlan[];
+  estimated_budget: number;
+  budget_breakdown: BudgetBreakdown;
+  differences: string[];
 }
 
 export interface Itinerary {
@@ -89,6 +135,72 @@ export interface Itinerary {
   budget_breakdown: BudgetBreakdown;
   tips: string[];
   source_notes: string[];
+  source_records?: SourceRecord[];
+  execution_events?: AgentExecutionEvent[];
+  candidate_itineraries?: CandidateItinerary[];
+}
+
+export interface TripVersionSummary {
+  trip_id: string;
+  version_number: number;
+  change_type: string;
+  summary: string;
+  created_at?: string | null;
+}
+
+export interface TripVersionListResponse {
+  trip_id: string;
+  total: number;
+  items: TripVersionSummary[];
+}
+
+export interface TripVersionDetailResponse {
+  trip_id: string;
+  version_number: number;
+  change_type: string;
+  itinerary: Itinerary;
+  created_at?: string | null;
+}
+
+export interface TripVersionCompareResponse {
+  trip_id: string;
+  from_version: number;
+  to_version: number;
+  differences: string[];
+}
+
+export interface TripVersionRestoreResponse {
+  trip_id: string;
+  restored_from_version: number;
+  new_version_number: number;
+  itinerary: Itinerary;
+}
+
+export interface UserMemoryItem {
+  id: number;
+  memory_type: string;
+  content: string;
+  created_at?: string | null;
+}
+
+export interface UserMemoryResponse {
+  enabled: boolean;
+  items: UserMemoryItem[];
+}
+
+export interface HumanConfirmationItem {
+  id: number;
+  trip_id?: string | null;
+  confirmation_type: string;
+  status: string;
+  payload: Record<string, unknown>;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface HumanConfirmationListResponse {
+  total: number;
+  items: HumanConfirmationItem[];
 }
 
 export interface TripSaveResponse {
@@ -125,6 +237,7 @@ export interface WeatherForecastDay {
   night_temp?: string | null;
   day_wind?: string | null;
   night_wind?: string | null;
+  source_type?: SourceType;
 }
 
 export interface WeatherForecastResponse {
@@ -133,4 +246,84 @@ export interface WeatherForecastResponse {
   adcode?: string | null;
   report_time?: string | null;
   days: WeatherForecastDay[];
+  source_type?: SourceType;
+}
+
+export interface AuthRequestPayload {
+  username: string;
+  password: string;
+}
+
+export interface AuthUser {
+  id: number;
+  username: string;
+  created_at: string;
+}
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: "bearer";
+}
+
+export type AssistantIntent =
+  | "modify_trip"
+  | "explain_plan"
+  | "query_trip"
+  | "confirm_action"
+  | "cancel_action"
+  | "general_travel_question"
+  | "unsupported";
+
+export type ConversationRole = "user" | "assistant" | "system";
+
+export type ConversationMessageType =
+  | "text"
+  | "trip_update"
+  | "explanation"
+  | "confirmation"
+  | "error";
+
+export interface AssistantMessagePayload {
+  trip_id: string;
+  message: string;
+  candidate_id?: string | null;
+  confirmation_id?: number | null;
+  action?: "confirmed" | "rejected" | null;
+}
+
+export interface ConversationMessageItem {
+  id: string;
+  conversation_id: string;
+  role: ConversationRole;
+  message_type: ConversationMessageType;
+  content: string;
+  structured_payload: Record<string, unknown>;
+  created_at?: string | null;
+  optimistic?: boolean;
+}
+
+export interface AssistantMessageResponse {
+  conversation_id: string;
+  message_id: string;
+  reply: string;
+  intent: AssistantIntent;
+  trip_changed: boolean;
+  new_version_number?: number | null;
+  confirmation_required: boolean;
+  execution_events: AgentExecutionEvent[];
+  itinerary?: Itinerary | null;
+  message?: ConversationMessageItem | null;
+  source_records: SourceRecord[];
+}
+
+export interface ConversationMessagesResponse {
+  conversation_id?: string | null;
+  trip_id: string;
+  total: number;
+  items: ConversationMessageItem[];
+}
+
+export interface ConversationClearResponse {
+  trip_id: string;
+  deleted_count: number;
 }

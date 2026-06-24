@@ -1,4 +1,6 @@
+import logging
 import os
+import secrets
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -8,6 +10,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BACKEND_DIR / ".env")
+logger = logging.getLogger(__name__)
 
 
 # 数据库配置
@@ -29,6 +32,22 @@ LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")
 LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "1"))
+
+
+# 认证 / JWT 配置
+_jwt_secret_key = os.getenv("JWT_SECRET_KEY", "").strip()
+JWT_SECRET_KEY_CONFIGURED = bool(_jwt_secret_key)
+JWT_SECRET_KEY = _jwt_secret_key or secrets.token_urlsafe(32)
+if not JWT_SECRET_KEY_CONFIGURED:
+    logger.warning(
+        "JWT_SECRET_KEY is not configured; using a process-local temporary key. "
+        "Tokens will be invalid after backend restart."
+    )
+
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(
+    os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "60")
+)
 
 
 # RAG / 向量库配置
@@ -63,3 +82,10 @@ AMAP_BASE_URL = os.getenv("AMAP_BASE_URL", "https://restapi.amap.com/v3")
 AMAP_DEFAULT_CITY = os.getenv("AMAP_DEFAULT_CITY", "")
 AMAP_TIMEOUT_SECONDS = int(os.getenv("AMAP_TIMEOUT_SECONDS", "20"))
 ENABLE_AMAP_ENRICHMENT = os.getenv("ENABLE_AMAP_ENRICHMENT", "false").lower() == "true"
+
+
+# Tavily search, exposed only through the backend whitelist tool.
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+TAVILY_API_URL = os.getenv("TAVILY_API_URL", "https://api.tavily.com/search")
+TAVILY_TIMEOUT_SECONDS = int(os.getenv("TAVILY_TIMEOUT_SECONDS", "20"))
+TAVILY_MAX_RETRIES = int(os.getenv("TAVILY_MAX_RETRIES", "1"))

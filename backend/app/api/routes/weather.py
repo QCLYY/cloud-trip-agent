@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from app.models.schemas import SourceType
 from app.services.weather_service import get_weather_forecast
 
 
@@ -19,6 +20,9 @@ class WeatherForecastDay(BaseModel):
     night_wind: str | None = Field(default=None, description="夜间风向")
 
 
+    source_type: SourceType = Field(default=SourceType.official_api, description="Data source")
+
+
 class WeatherForecastResponse(BaseModel):
     """天气预报接口响应。"""
 
@@ -27,6 +31,9 @@ class WeatherForecastResponse(BaseModel):
     adcode: str | None = Field(default=None, description="行政区编码")
     report_time: str | None = Field(default=None, description="预报发布时间")
     days: list[WeatherForecastDay] = Field(default_factory=list, description="未来天气")
+
+
+    source_type: SourceType = Field(default=SourceType.official_api, description="Data source")
 
 
 router = APIRouter(prefix="/weather", tags=["weather"])

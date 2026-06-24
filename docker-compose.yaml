@@ -20,7 +20,6 @@ services:
       - REDIS_URL=redis://redis:6379/0
     volumes:
       - backend_db:/app/db
-      - backend_data:/app/data
     depends_on:
       - redis
     restart: unless-stopped
@@ -37,4 +36,6 @@ services:
 volumes:
   redis_data:
   backend_db:
+  # Legacy volume retained but no longer mounted to /app/data, so image-bundled
+  # guide/demo files under /app/data stay readable. Do not delete this volume.
   backend_data:

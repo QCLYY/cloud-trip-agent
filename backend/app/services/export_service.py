@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from io import BytesIO
-from urllib.request import Request, urlopen
 from xml.sax.saxutils import escape
 
 from app.models.schemas import Itinerary, TripDetailResponse
@@ -20,14 +19,24 @@ TECHNICAL_EXPORT_KEYWORDS = (
     "trip_service",
 )
 
+SOURCE_TYPE_LABELS = {
+    "demo": "本地演示数据",
+    "estimate": "规则估算",
+    "user_input": "用户录入",
+    "tavily": "Tavily 外部检索",
+    "official_api": "正式 API",
+}
+
+NON_REALTIME_SOURCE_TYPES = {"demo", "estimate", "tavily"}
+
 
 def _safe_text(value: object) -> str:
-    """转义 ReportLab Paragraph 里的特殊字符，避免内容被当成标签解析。"""
+    """Escape text for ReportLab Paragraph content."""
     return escape(str(value or ""))
 
 
 def _clean_export_tips(tips: list[str]) -> list[str]:
-    """过滤导出文件里的内部实现说明。"""
+    """Remove backend-only implementation notes from exported user files."""
     cleaned_tips: list[str] = []
     for tip in tips:
         normalized_tip = tip.strip()
@@ -41,7 +50,7 @@ def _clean_export_tips(tips: list[str]) -> list[str]:
 
 
 def _public_source_notes(source_notes: list[str]) -> list[str]:
-    """只保留用户可读的攻略来源，过滤后端实现说明。"""
+    """Keep user-readable guide citations and omit internal implementation notes."""
     public_notes: list[str] = []
     for note in source_notes:
         normalized_note = note.strip()
@@ -54,8 +63,35 @@ def _public_source_notes(source_notes: list[str]) -> list[str]:
     return public_notes
 
 
+def _source_type_label(source_type: object) -> str:
+    value = getattr(source_type, "value", source_type)
+    return SOURCE_TYPE_LABELS.get(str(value), str(value))
+
+
+def _render_source_record_lines(itinerary: Itinerary) -> list[str]:
+    lines: list[str] = []
+    for record in itinerary.source_records:
+        label = _source_type_label(record.source_type)
+        category = f" / {record.category}" if record.category else ""
+        url_text = f" / URL: {record.url}" if record.url else ""
+        lines.append(
+            f"- {record.title}（{label}{category}{url_text}）：{record.summary}"
+        )
+
+    has_non_realtime = any(
+        str(getattr(record.source_type, "value", record.source_type))
+        in NON_REALTIME_SOURCE_TYPES
+        for record in itinerary.source_records
+    )
+    if has_non_realtime:
+        lines.append(
+            "- 说明：本地演示数据、规则估算和 Tavily 外部检索不代表实时价格、"
+            "实时库存或可预订结果。"
+        )
+    return lines
+
+
 def _render_budget_lines(itinerary: Itinerary) -> list[str]:
-    """把预算拆分渲染成 Markdown 列表。"""
     budget = itinerary.budget_breakdown
     return [
         f"- 交通：{budget.transport:.2f} 元",
@@ -68,7 +104,7 @@ def _render_budget_lines(itinerary: Itinerary) -> list[str]:
 
 
 def itinerary_to_markdown(trip_detail: TripDetailResponse) -> str:
-    """把完整 itinerary 渲染成便于分享的 Markdown 文本。"""
+    """Render a saved itinerary as shareable Markdown."""
     itinerary = trip_detail.itinerary
 
     lines: list[str] = [
@@ -78,7 +114,7 @@ def itinerary_to_markdown(trip_detail: TripDetailResponse) -> str:
         f"- 目的地：{itinerary.destination}",
         f"- 预计预算：{itinerary.estimated_budget:.2f} 元",
         "",
-        "## 行程概述",
+        "## 行程概览",
         itinerary.summary,
         "",
         "## 每日安排",
@@ -99,6 +135,7 @@ def itinerary_to_markdown(trip_detail: TripDetailResponse) -> str:
                     f"- 主要景点：{spot.name}",
                     f"  - 时间：{spot.start_time or '待定'} - {spot.end_time or '待定'}",
                     f"  - 说明：{spot.description or '无'}",
+                    f"  - 来源：{_source_type_label(spot.source_type)}",
                 ]
             )
 
@@ -107,12 +144,16 @@ def itinerary_to_markdown(trip_detail: TripDetailResponse) -> str:
                 [
                     f"- 餐饮建议：{meal.name}（{meal.meal_type}）",
                     f"  - 说明：{meal.notes or '无'}",
+                    f"  - 来源：{_source_type_label(meal.source_type)}",
                 ]
             )
 
         if day.hotel is not None:
-            lines.append(
-                f"- 住宿安排：{day.hotel.name}（{day.hotel.level or '未标注档次'}）"
+            lines.extend(
+                [
+                    f"- 住宿安排：{day.hotel.name}（{day.hotel.level or '未标注档次'}）",
+                    f"  - 来源：{_source_type_label(day.hotel.source_type)}",
+                ]
             )
 
         for note in day.notes:
@@ -130,11 +171,16 @@ def itinerary_to_markdown(trip_detail: TripDetailResponse) -> str:
         lines.extend(["", "## 攻略参考"])
         lines.extend(f"- {note}" for note in public_notes)
 
+    source_record_lines = _render_source_record_lines(itinerary)
+    if source_record_lines:
+        lines.extend(["", "## 数据来源说明"])
+        lines.extend(source_record_lines)
+
     return "\n".join(lines).strip() + "\n"
 
 
 def _register_pdf_font() -> str:
-    """注册一套可用于中文 PDF 的字体。"""
+    """Register a CJK-capable font for PDF rendering."""
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 
@@ -147,7 +193,6 @@ def _register_pdf_font() -> str:
 
 
 def _draw_pdf_footer(canvas, doc, trip_detail: TripDetailResponse, font_name: str) -> None:
-    """在每一页底部绘制页脚和页码。"""
     from reportlab.lib import colors
     from reportlab.lib.units import mm
 
@@ -162,38 +207,13 @@ def _draw_pdf_footer(canvas, doc, trip_detail: TripDetailResponse, font_name: st
 
     canvas.setFont(font_name, 9)
     canvas.setFillColor(colors.HexColor("#52606d"))
-    canvas.drawString(doc.leftMargin, footer_y, f"Trip Planner Demo | {trip_detail.trip_id}")
+    canvas.drawString(doc.leftMargin, footer_y, f"云程智绘图 | {trip_detail.trip_id}")
     canvas.drawRightString(page_width - doc.rightMargin, footer_y, f"第 {canvas.getPageNumber()} 页")
     canvas.restoreState()
 
 
-def _load_pdf_image(image_url: str, max_width: float, max_height: float):
-    """下载景点图片并转换成 ReportLab 可渲染对象，失败时返回 None。"""
-    from reportlab.platypus import Image
-
-    if not image_url:
-        return None
-
-    try:
-        request = Request(
-            image_url,
-            headers={"User-Agent": "TripPlannerDemo/1.0"},
-        )
-        with urlopen(request, timeout=5) as response:
-            image_bytes = response.read(2_000_000)
-    except Exception:
-        return None
-
-    try:
-        image = Image(BytesIO(image_bytes))
-        image._restrictSize(max_width, max_height)
-        return image
-    except Exception:
-        return None
-
-
 def itinerary_to_pdf_bytes(trip_detail: TripDetailResponse) -> bytes:
-    """把完整 itinerary 渲染成排版更清晰的 PDF 二进制内容。"""
+    """Render a saved itinerary as a PDF byte stream."""
     try:
         from reportlab.lib import colors
         from reportlab.lib.pagesizes import A4
@@ -320,7 +340,7 @@ def itinerary_to_pdf_bytes(trip_detail: TripDetailResponse) -> bytes:
     )
     story.extend([meta_table, Spacer(1, 8)])
 
-    story.append(Paragraph("行程概述", section_style))
+    story.append(Paragraph("行程概览", section_style))
     story.append(Paragraph(_safe_text(itinerary.summary), body_style))
 
     story.append(Paragraph("每日安排", section_style))
@@ -328,20 +348,17 @@ def itinerary_to_pdf_bytes(trip_detail: TripDetailResponse) -> bytes:
         title = f"Day {day.day_index}"
         if day.theme:
             title += f" · {day.theme}"
-        story.append(Paragraph(title, day_style))
+        story.append(Paragraph(_safe_text(title), day_style))
 
         if day.date:
             story.append(Paragraph(f"日期：{day.date.isoformat()}", body_style))
 
         for spot in day.spots:
             story.append(Paragraph(f"主要景点：{_safe_text(spot.name)}", body_style))
-            image_url = getattr(spot, "image_url", None)
-            spot_image = _load_pdf_image(image_url or "", max_width=72 * mm, max_height=42 * mm)
-            if spot_image is not None:
-                story.extend([spot_image, Spacer(1, 4)])
             story.append(
                 Paragraph(
-                    f"时间：{_safe_text(spot.start_time or '待定')} - {_safe_text(spot.end_time or '待定')}",
+                    f"时间：{_safe_text(spot.start_time or '待定')} - "
+                    f"{_safe_text(spot.end_time or '待定')}",
                     note_style,
                 )
             )
@@ -353,6 +370,12 @@ def itinerary_to_pdf_bytes(trip_detail: TripDetailResponse) -> bytes:
                     )
                 )
             story.append(Paragraph(f"说明：{_safe_text(spot.description or '无')}", note_style))
+            story.append(
+                Paragraph(
+                    f"来源：{_safe_text(_source_type_label(spot.source_type))}",
+                    note_style,
+                )
+            )
 
         for meal in day.meals:
             story.append(
@@ -362,12 +385,25 @@ def itinerary_to_pdf_bytes(trip_detail: TripDetailResponse) -> bytes:
                 )
             )
             story.append(Paragraph(f"说明：{_safe_text(meal.notes or '无')}", note_style))
+            story.append(
+                Paragraph(
+                    f"来源：{_safe_text(_source_type_label(meal.source_type))}",
+                    note_style,
+                )
+            )
 
         if day.hotel is not None:
             story.append(
                 Paragraph(
-                    f"住宿安排：{_safe_text(day.hotel.name)}（{_safe_text(day.hotel.level or '未标注档次')}）",
+                    f"住宿安排：{_safe_text(day.hotel.name)}"
+                    f"（{_safe_text(day.hotel.level or '未标注档次')}）",
                     body_style,
+                )
+            )
+            story.append(
+                Paragraph(
+                    f"来源：{_safe_text(_source_type_label(day.hotel.source_type))}",
+                    note_style,
                 )
             )
 
@@ -419,6 +455,12 @@ def itinerary_to_pdf_bytes(trip_detail: TripDetailResponse) -> bytes:
         story.append(Paragraph("攻略参考", section_style))
         for note in public_notes:
             story.append(Paragraph(f"- {_safe_text(note)}", body_style))
+
+    source_record_lines = _render_source_record_lines(itinerary)
+    if source_record_lines:
+        story.append(Paragraph("数据来源说明", section_style))
+        for line in source_record_lines:
+            story.append(Paragraph(_safe_text(line), body_style))
 
     def draw_footer(canvas, document) -> None:
         _draw_pdf_footer(canvas, document, trip_detail, font_name)

@@ -17,6 +17,8 @@ from app.models.schemas import (  # noqa: E402
     HotelItem,
     Itinerary,
     MealItem,
+    SourceRecord,
+    SourceType,
     SpotItem,
     TransportItem,
     TripEditRequest,
@@ -145,6 +147,22 @@ def test_itinerary_can_be_created_successfully() -> None:
     assert len(itinerary.days) == 1
     assert itinerary.days[0].theme == "古城慢游"
     assert itinerary.budget_breakdown.total == 1550
+    assert itinerary.days[0].spots[0].source_type == SourceType.estimate
+    assert itinerary.days[0].spots[0].cost_source_type == SourceType.estimate
+    assert itinerary.budget_breakdown.source_type == SourceType.estimate
+    assert itinerary.source_records == []
+
+
+def test_source_record_accepts_supported_source_types() -> None:
+    record = SourceRecord(
+        title="Amap official API",
+        summary="POI data",
+        source_type=SourceType.official_api,
+        category="map",
+    )
+
+    assert record.source_type == SourceType.official_api
+    assert record.url is None
 
 
 def test_day_plan_contains_nested_objects() -> None:

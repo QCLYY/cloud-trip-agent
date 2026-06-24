@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date as DateType, timedelta
 
+from app.agents.workflow.trip_workflow import run_trip_generation_workflow
 from app.agents.trip_planner_agent import (
     collect_trip_context,
     generate_day_edit_draft,
@@ -14,12 +15,15 @@ from app.models.schemas import (
     HotelItem,
     Itinerary,
     MealItem,
+    SourceRecord,
+    SourceType,
     SpotItem,
     TokenUsage,
     TransportItem,
     TripEditRequest,
     TripRequest,
 )
+from app.services.candidate_service import attach_candidate_itineraries
 from app.services.map_service import enrich_itinerary_with_map_data
 
 
@@ -214,6 +218,7 @@ def _refresh_budget_breakdown(itinerary: Itinerary, request_budget: float | None
         tickets=ticket_total,
         other=other_total,
         total=total,
+        source_type=SourceType.estimate,
     )
     itinerary.estimated_budget = total
     return itinerary
@@ -234,7 +239,7 @@ def _maybe_enrich_itinerary_with_map_data(
     return _refresh_budget_breakdown(itinerary, request_budget=request_budget)
 
 
-def generate_trip_itinerary(request: TripRequest) -> Itinerary:
+def _generate_trip_itinerary_legacy(request: TripRequest) -> Itinerary:
     """生成完整 itinerary，并使用更真实的预算估算方式。"""
     day_count = (request.end_date - request.start_date).days + 1
     day_count = max(day_count, 1)
@@ -419,6 +424,23 @@ def generate_trip_itinerary(request: TripRequest) -> Itinerary:
         "Itinerary is assembled by trip_service.py and can optionally use LangChain structured output.",
     ]
     source_notes.extend(rag_contexts[:2])
+    source_records = [
+        SourceRecord(
+            title="Local planning rules and RAG context",
+            summary="Initial itinerary structure, costs, hotel choices, meals, tickets and pacing are generated from deterministic rules plus local knowledge context.",
+            source_type=SourceType.estimate,
+            category="itinerary",
+        )
+    ]
+    for index, context in enumerate(rag_contexts[:3], start=1):
+        source_records.append(
+            SourceRecord(
+                title=f"Local travel guide snippet {index}",
+                summary=context[:300],
+                source_type=SourceType.demo,
+                category="rag",
+            )
+        )
 
     tips = (
         llm_draft.tips
@@ -447,6 +469,7 @@ def generate_trip_itinerary(request: TripRequest) -> Itinerary:
         budget_breakdown=BudgetBreakdown(),
         tips=tips,
         source_notes=source_notes,
+        source_records=source_records,
         token_usage=token_usage,
     )
     return _maybe_enrich_itinerary_with_map_data(
@@ -454,6 +477,19 @@ def generate_trip_itinerary(request: TripRequest) -> Itinerary:
         city=request.destination,
         request_budget=request.budget,
     )
+
+
+def generate_trip_itinerary(request: TripRequest, user_id: int | None = None) -> Itinerary:
+    """Generate itinerary through the Agent workflow, with legacy fallback."""
+    try:
+        itinerary = run_trip_generation_workflow(
+            request,
+            legacy_generator=_generate_trip_itinerary_legacy,
+            user_id=user_id,
+        )
+        return attach_candidate_itineraries(itinerary)
+    except Exception:
+        return attach_candidate_itineraries(_generate_trip_itinerary_legacy(request))
 
 
 def edit_trip_itinerary(request: TripEditRequest) -> Itinerary:

@@ -3,17 +3,19 @@ import { computed, ref, watch } from "vue";
 import { message } from "ant-design-vue";
 
 import AmapTripMap from "../components/AmapTripMap.vue";
+import AssistantPanel from "../components/AssistantPanel.vue";
 import {
   editTrip,
+  exportTripMarkdown,
+  exportTripPdf,
   fetchWeatherForecast,
-  getMarkdownExportUrl,
-  getPdfExportUrl,
   saveTrip,
 } from "../services/api";
-import type { Itinerary, WeatherForecastResponse } from "../types";
+import type { CandidateItinerary, DayPlan, Itinerary, SourceType, WeatherForecastResponse } from "../types";
 
 const props = defineProps<{
   itinerary: Itinerary | null;
+  mode?: "result" | "sources" | "agent-status";
 }>();
 
 const emit = defineEmits<{
@@ -31,6 +33,35 @@ const editInstruction = ref("这一天节奏更轻松一点，减少固定安排
 const weatherLoading = ref(false);
 const weatherError = ref("");
 const weather = ref<WeatherForecastResponse | null>(null);
+const draggedDayIndex = ref<number | null>(null);
+const pendingChangeType = ref("manual_save");
+const viewMode = computed(() => props.mode || "result");
+const isResultMode = computed(() => viewMode.value === "result");
+const isSourcesMode = computed(() => viewMode.value === "sources");
+const isAgentStatusMode = computed(() => viewMode.value === "agent-status");
+
+const sourceTypeLabels: Record<SourceType, string> = {
+  demo: "本地演示",
+  estimate: "规则估算",
+  user_input: "用户录入",
+  tavily: "Tavily 检索",
+  official_api: "正式 API",
+};
+
+function sourceLabel(sourceType?: SourceType | null): string {
+  if (!sourceType) {
+    return "未标记";
+  }
+  return sourceTypeLabels[sourceType] || sourceType;
+}
+
+function isNonRealtimeSource(sourceType?: SourceType | null): boolean {
+  return sourceType === "demo" || sourceType === "estimate" || sourceType === "tavily";
+}
+
+const sourceRecords = computed(() => props.itinerary?.source_records || []);
+const candidateItineraries = computed(() => props.itinerary?.candidate_itineraries || []);
+const agentEvents = computed(() => props.itinerary?.execution_events || []);
 
 function formatShortDate(dateText?: string | null): string {
   if (!dateText) {
@@ -66,10 +97,10 @@ const budgetItems = computed(() => {
 
   const budget = props.itinerary.budget_breakdown;
   return [
-    { label: "景点门票", value: `¥${budget.tickets.toFixed(0)}` },
-    { label: "酒店住宿", value: `¥${budget.hotel.toFixed(0)}` },
-    { label: "餐饮费用", value: `¥${budget.meals.toFixed(0)}` },
-    { label: "交通费用", value: `¥${budget.transport.toFixed(0)}` },
+    { label: "景点门票", value: `¥${budget.tickets.toFixed(0)}`, sourceType: budget.source_type },
+    { label: "酒店住宿", value: `¥${budget.hotel.toFixed(0)}`, sourceType: budget.source_type },
+    { label: "餐饮费用", value: `¥${budget.meals.toFixed(0)}`, sourceType: budget.source_type },
+    { label: "交通费用", value: `¥${budget.transport.toFixed(0)}`, sourceType: budget.source_type },
   ];
 });
 
@@ -116,6 +147,8 @@ const mapPoints = computed(() => {
       poiId: spot.poi_id,
       imageUrl: spot.image_url,
       description: spot.description || "暂无说明",
+      sourceType: spot.source_type,
+      costSourceType: spot.cost_source_type,
     }))
   );
 });
@@ -190,6 +223,106 @@ function buildVisibleItinerary(): Itinerary | null {
   };
 }
 
+function recalculateBudget(itinerary: Itinerary): Itinerary {
+  const transport = itinerary.days.reduce(
+    (sum, day) => sum + day.transport.reduce((daySum, item) => daySum + (item.estimated_cost ?? 0), 0),
+    0,
+  );
+  const hotel = itinerary.days.reduce((sum, day) => sum + (day.hotel?.estimated_cost ?? 0), 0);
+  const meals = itinerary.days.reduce(
+    (sum, day) => sum + day.meals.reduce((daySum, item) => daySum + (item.estimated_cost ?? 0), 0),
+    0,
+  );
+  const tickets = itinerary.days.reduce(
+    (sum, day) => sum + day.spots.reduce((daySum, item) => daySum + (item.estimated_cost ?? 0), 0),
+    0,
+  );
+  const other = Math.max(0, Number(((transport + hotel + meals + tickets) * 0.06).toFixed(2)));
+  const total = Number((transport + hotel + meals + tickets + other).toFixed(2));
+  return {
+    ...itinerary,
+    estimated_budget: total,
+    budget_breakdown: {
+      transport: Number(transport.toFixed(2)),
+      hotel: Number(hotel.toFixed(2)),
+      meals: Number(meals.toFixed(2)),
+      tickets: Number(tickets.toFixed(2)),
+      other,
+      total,
+      source_type: "estimate",
+    },
+  };
+}
+
+function applyCandidate(candidate: CandidateItinerary) {
+  if (!props.itinerary) {
+    return;
+  }
+  pendingChangeType.value = "candidate_select";
+  emit("updated", {
+    ...props.itinerary,
+    summary: candidate.summary,
+    days: candidate.days,
+    estimated_budget: candidate.estimated_budget,
+    budget_breakdown: candidate.budget_breakdown,
+  });
+  message.success(`已套用候选方案：${candidate.title}，保存后会生成新版本。`);
+}
+
+function handleDayDragStart(dayIndex: number) {
+  draggedDayIndex.value = dayIndex;
+}
+
+function normalizeReorderedDays(days: DayPlan[]): DayPlan[] {
+  return days.map((day, index) => ({
+    ...day,
+    day_index: index + 1,
+    notes: Array.from(new Set([...(day.notes || []), "已通过拖拽调整日程顺序。"])),
+  }));
+}
+
+function handleDayDrop(targetDayIndex: number) {
+  if (!props.itinerary || draggedDayIndex.value === null || draggedDayIndex.value === targetDayIndex) {
+    draggedDayIndex.value = null;
+    return;
+  }
+
+  const days = props.itinerary.days.map((day) => ({ ...day }));
+  const fromIndex = days.findIndex((day) => day.day_index === draggedDayIndex.value);
+  const toIndex = days.findIndex((day) => day.day_index === targetDayIndex);
+  if (fromIndex === -1 || toIndex === -1) {
+    draggedDayIndex.value = null;
+    return;
+  }
+
+  const [movedDay] = days.splice(fromIndex, 1);
+  days.splice(toIndex, 0, movedDay);
+  const updated = recalculateBudget({
+    ...props.itinerary,
+    days: normalizeReorderedDays(days),
+  });
+  pendingChangeType.value = "drag_edit";
+  draggedDayIndex.value = null;
+  emit("updated", updated);
+  message.success("日程顺序已调整，保存后会生成拖拽编辑版本。");
+}
+
+function openBlobExport(blob: Blob, filename: string, exportWindow: Window | null) {
+  const blobUrl = URL.createObjectURL(blob);
+  if (exportWindow) {
+    exportWindow.location.href = blobUrl;
+  } else {
+    const link = document.createElement("a");
+    link.href = blobUrl;
+    link.download = filename;
+    link.click();
+  }
+
+  window.setTimeout(() => {
+    URL.revokeObjectURL(blobUrl);
+  }, 60000);
+}
+
 async function loadWeather() {
   if (!props.itinerary?.destination) {
     weather.value = null;
@@ -235,13 +368,13 @@ async function openPdfExport() {
   const exportWindow = window.open("about:blank", "_blank");
   exportingPdf.value = true;
   try {
-    await saveTrip(itineraryToExport);
-    const exportUrl = getPdfExportUrl(itineraryToExport.trip_id);
-    if (exportWindow) {
-      exportWindow.location.href = exportUrl;
-    } else {
-      window.location.href = exportUrl;
+    const saveResponse = await saveTrip(itineraryToExport);
+    const exportTripId = saveResponse.trip_id;
+    if (exportTripId !== itineraryToExport.trip_id) {
+      emit("updated", { ...itineraryToExport, trip_id: exportTripId });
     }
+    const pdfBlob = await exportTripPdf(exportTripId);
+    openBlobExport(pdfBlob, `${exportTripId}.pdf`, exportWindow);
   } catch (error) {
     console.error(error);
     exportWindow?.close();
@@ -260,13 +393,13 @@ async function openMarkdownExport() {
   const exportWindow = window.open("about:blank", "_blank");
   exportingMarkdown.value = true;
   try {
-    await saveTrip(itineraryToExport);
-    const exportUrl = getMarkdownExportUrl(itineraryToExport.trip_id);
-    if (exportWindow) {
-      exportWindow.location.href = exportUrl;
-    } else {
-      window.location.href = exportUrl;
+    const saveResponse = await saveTrip(itineraryToExport);
+    const exportTripId = saveResponse.trip_id;
+    if (exportTripId !== itineraryToExport.trip_id) {
+      emit("updated", { ...itineraryToExport, trip_id: exportTripId });
     }
+    const markdownBlob = await exportTripMarkdown(exportTripId);
+    openBlobExport(markdownBlob, `${exportTripId}.md`, exportWindow);
   } catch (error) {
     console.error(error);
     exportWindow?.close();
@@ -284,7 +417,11 @@ async function handleSave() {
 
   saving.value = true;
   try {
-    await saveTrip(itineraryToSave);
+    const saveResponse = await saveTrip(itineraryToSave, pendingChangeType.value);
+    if (saveResponse.trip_id !== itineraryToSave.trip_id) {
+      emit("updated", { ...itineraryToSave, trip_id: saveResponse.trip_id });
+    }
+    pendingChangeType.value = "manual_save";
     message.success("行程已保存，可以去历史列表查看。");
   } catch (error) {
     console.error(error);
@@ -323,13 +460,22 @@ async function handleEdit() {
     editing.value = false;
   }
 }
+
+function handleAssistantUpdated(updatedItinerary: Itinerary, versionNumber?: number | null) {
+  emit("updated", updatedItinerary);
+  if (versionNumber) {
+    message.success(`AI 旅行顾问已生成版本 ${versionNumber}`);
+  }
+}
 </script>
 
 <template>
   <section v-if="itinerary" class="result-page">
     <aside class="sidebar-card">
-      <div class="sidebar-card__title">行程导航</div>
-      <ul class="sidebar-list">
+      <div class="sidebar-card__title">
+        {{ isSourcesMode ? "来源导航" : isAgentStatusMode ? "执行导航" : "行程导航" }}
+      </div>
+      <ul v-if="isResultMode" class="sidebar-list">
         <li>行程概览</li>
         <li>预算明细</li>
         <li>按天花费</li>
@@ -339,17 +485,28 @@ async function handleEdit() {
         <li>点位明细</li>
         <li>每日行程</li>
       </ul>
+      <ul v-else-if="isSourcesMode" class="sidebar-list">
+        <li>当前行程：{{ itinerary.destination }}</li>
+        <li>来源记录：{{ sourceRecords.length }} 条</li>
+        <li>来源仅作参考，不展示实时库存或可预订结果</li>
+      </ul>
+      <ul v-else class="sidebar-list">
+        <li>当前行程：{{ itinerary.destination }}</li>
+        <li>执行事件：{{ agentEvents.length }} 条</li>
+        <li>只展示执行状态，不展示内部思维链</li>
+      </ul>
 
       <div class="sidebar-actions">
         <button class="back-button" @click="$emit('backHome')">返回规划页</button>
-        <button class="save-button" :disabled="saving" @click="handleSave">
+        <button v-if="isResultMode" class="save-button" :disabled="saving" @click="handleSave">
           {{ saving ? "保存中..." : "保存行程" }}
         </button>
         <button class="history-button" @click="$emit('viewHistory')">历史列表</button>
-        <button class="export-button" :disabled="exportingPdf" @click="openPdfExport">
+        <button v-if="isResultMode" class="export-button" :disabled="exportingPdf" @click="openPdfExport">
           {{ exportingPdf ? "准备 PDF..." : "导出 PDF" }}
         </button>
         <button
+          v-if="isResultMode"
           class="export-button export-button--light"
           :disabled="exportingMarkdown"
           @click="openMarkdownExport"
@@ -360,6 +517,7 @@ async function handleEdit() {
     </aside>
 
     <div class="result-grid">
+      <template v-if="isResultMode">
       <section class="result-card">
         <div class="result-card__title">{{ itinerary.destination }}旅行计划</div>
         <div class="info-row"><strong>行程 ID：</strong>{{ itinerary.trip_id }}</div>
@@ -384,11 +542,37 @@ async function handleEdit() {
           <div v-for="item in budgetItems" :key="item.label" class="budget-box">
             <div class="budget-box__label">{{ item.label }}</div>
             <div class="budget-box__value">{{ item.value }}</div>
+            <div class="source-badge" :class="{ 'source-badge--caution': isNonRealtimeSource(item.sourceType) }">
+              {{ sourceLabel(item.sourceType) }}
+            </div>
           </div>
         </div>
         <div class="budget-total">
           <span>预估总费用</span>
           <strong>¥{{ itinerary.estimated_budget.toFixed(0) }}</strong>
+        </div>
+      </section>
+
+      <section v-if="candidateItineraries.length" class="result-card result-card--full">
+        <div class="result-card__title">候选方案</div>
+        <div class="candidate-grid">
+          <article
+            v-for="candidate in candidateItineraries"
+            :key="candidate.candidate_id"
+            class="candidate-card"
+          >
+            <div class="candidate-card__header">
+              <strong>{{ candidate.title }}</strong>
+              <span>¥{{ candidate.estimated_budget.toFixed(0) }}</span>
+            </div>
+            <p>{{ candidate.summary }}</p>
+            <ul>
+              <li v-for="diff in candidate.differences" :key="diff">{{ diff }}</li>
+            </ul>
+            <button type="button" class="candidate-card__button" @click="applyCandidate(candidate)">
+              套用此方案
+            </button>
+          </article>
         </div>
       </section>
 
@@ -411,6 +595,7 @@ async function handleEdit() {
             <div class="weather-card__date">
               {{ formatWeatherDate(day.date, day.week) }}
             </div>
+            <div class="source-badge">{{ sourceLabel(day.source_type || weather.source_type) }}</div>
             <div class="weather-card__temp">
               {{ day.day_temp || "-" }}° / {{ day.night_temp || "-" }}°
             </div>
@@ -518,6 +703,12 @@ async function handleEdit() {
                 <strong>地址：</strong>
                 <span>{{ point.address }}</span>
               </div>
+              <div class="point-card__line">
+                <strong>来源：</strong>
+                <span class="source-badge" :class="{ 'source-badge--caution': isNonRealtimeSource(point.sourceType) }">
+                  {{ sourceLabel(point.sourceType) }}
+                </span>
+              </div>
               <div class="point-card__desc">{{ point.description }}</div>
             </div>
           </article>
@@ -530,18 +721,24 @@ async function handleEdit() {
           <details
             v-for="day in itinerary.days"
             :key="day.day_index"
-            class="day-card"
+            :class="['day-card', { 'day-card--dragging': draggedDayIndex === day.day_index }]"
             :open="day.day_index === 1"
+            draggable="true"
+            @dragstart="handleDayDragStart(day.day_index)"
+            @dragover.prevent
+            @drop="handleDayDrop(day.day_index)"
           >
             <summary class="day-card__header">
               <span>第{{ day.day_index }}天 · {{ day.theme || "未命名主题" }}</span>
               <span class="day-card__meta">{{ formatShortDate(day.date) }}</span>
+              <span class="drag-hint">拖拽排序</span>
             </summary>
 
             <div class="day-card__body">
               <div class="day-card__section">
                 <strong>主要景点：</strong>
                 <span>{{ day.spots[0]?.name || "未安排" }}</span>
+                <span v-if="day.spots[0]" class="source-badge">{{ sourceLabel(day.spots[0].source_type) }}</span>
               </div>
               <div class="day-card__section">
                 <strong>景点地址：</strong>
@@ -550,10 +747,12 @@ async function handleEdit() {
               <div class="day-card__section">
                 <strong>餐饮建议：</strong>
                 <span>{{ day.meals[0]?.name || "未安排" }}</span>
+                <span v-if="day.meals[0]" class="source-badge">{{ sourceLabel(day.meals[0].source_type) }}</span>
               </div>
               <div class="day-card__section">
                 <strong>住宿安排：</strong>
                 <span>{{ day.hotel?.name || "未安排" }}</span>
+                <span v-if="day.hotel" class="source-badge">{{ sourceLabel(day.hotel.source_type) }}</span>
               </div>
               <div class="day-card__section">
                 <strong>交通信息：</strong>
@@ -564,6 +763,7 @@ async function handleEdit() {
                       : day.transport[0]?.duration || "待补充"
                   }}
                 </span>
+                <span v-if="day.transport[0]" class="source-badge">{{ sourceLabel(day.transport[0].source_type) }}</span>
               </div>
               <div class="day-card__section">
                 <strong>备注：</strong>
@@ -573,7 +773,72 @@ async function handleEdit() {
           </details>
         </div>
       </section>
+      </template>
+
+      <template v-else-if="isSourcesMode">
+        <section class="result-card result-card--full">
+          <div class="result-card__title">{{ itinerary.destination }}数据来源</div>
+          <div class="mode-summary">
+            当前页仅展示这条旅行结果使用到的来源记录，包括高德、天气、Tavily、本地演示和规则估算等来源。
+          </div>
+          <div v-if="sourceRecords.length" class="source-record-list">
+            <article
+              v-for="record in sourceRecords"
+              :key="`${record.title}-${record.queried_at}`"
+              class="source-record"
+            >
+              <div class="source-record__header">
+                <strong>{{ record.title }}</strong>
+                <span class="source-badge" :class="{ 'source-badge--caution': isNonRealtimeSource(record.source_type) }">
+                  {{ sourceLabel(record.source_type) }}
+                </span>
+              </div>
+              <p>{{ record.summary }}</p>
+              <a v-if="record.url" :href="record.url" target="_blank" rel="noreferrer">查看来源</a>
+            </article>
+          </div>
+          <div v-else class="empty-inline">当前行程暂时没有单独的来源记录。</div>
+          <p class="source-disclaimer">
+            本地演示数据、规则估算和 Tavily 外部检索不代表实时价格、实时库存或可预订结果。
+          </p>
+        </section>
+      </template>
+
+      <template v-else-if="isAgentStatusMode">
+        <section class="result-card result-card--full">
+          <div class="result-card__title">{{ itinerary.destination }}Agent 执行状态</div>
+          <div class="mode-summary">
+            当前页只展示本次旅行规划相关的 Agent 和工具执行记录，不展示模型内部思维链。
+          </div>
+          <div v-if="agentEvents.length" class="agent-event-list">
+            <article
+              v-for="(event, index) in agentEvents"
+              :key="`${event.request_id}-${event.agent}-${index}`"
+              class="agent-event"
+            >
+              <div>
+                <strong>{{ event.agent }}</strong>
+                <span v-if="event.tool"> / {{ event.tool }}</span>
+              </div>
+              <div class="agent-event__meta">
+                <span>{{ event.status }}</span>
+                <span>{{ event.duration_ms }} ms</span>
+                <span v-if="event.fallback">已降级</span>
+                <span v-if="event.source_type">{{ sourceLabel(event.source_type) }}</span>
+                <span v-if="event.error">{{ event.error }}</span>
+              </div>
+            </article>
+          </div>
+          <div v-else class="empty-inline">当前行程暂时没有 Agent 执行记录。</div>
+        </section>
+      </template>
     </div>
+
+    <AssistantPanel
+      v-if="isResultMode"
+      :itinerary="itinerary"
+      @updated="handleAssistantUpdated"
+    />
   </section>
 
   <section v-else class="empty-state">
@@ -757,6 +1022,25 @@ async function handleEdit() {
   font-weight: 700;
 }
 
+.source-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin-top: 8px;
+  border-radius: 999px;
+  padding: 3px 9px;
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.source-badge--caution {
+  background: rgba(245, 158, 11, 0.14);
+  color: #92400e;
+}
+
 .budget-total {
   display: flex;
   justify-content: space-between;
@@ -770,6 +1054,68 @@ async function handleEdit() {
 
 .budget-total strong {
   font-size: 28px;
+}
+
+.candidate-grid,
+.agent-event-list {
+  display: grid;
+  gap: 12px;
+}
+
+.candidate-grid {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.candidate-card,
+.agent-event {
+  padding: 14px;
+  border: 1px solid rgba(98, 116, 164, 0.08);
+  border-radius: 16px;
+  background: #fbfcff;
+}
+
+.candidate-card__header,
+.agent-event {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.candidate-card__header {
+  color: #42558d;
+}
+
+.candidate-card p {
+  margin: 10px 0;
+  color: #667085;
+  line-height: 1.7;
+}
+
+.candidate-card ul {
+  margin: 0 0 12px;
+  padding-left: 18px;
+  color: #475467;
+  line-height: 1.7;
+}
+
+.candidate-card__button {
+  border: none;
+  border-radius: 12px;
+  padding: 9px 12px;
+  background: rgba(59, 130, 246, 0.12);
+  color: #3568d4;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.agent-event__meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  color: #667085;
+  font-size: 12px;
 }
 
 .weather-state {
@@ -970,6 +1316,56 @@ async function handleEdit() {
   line-height: 1.7;
 }
 
+.source-record-list {
+  display: grid;
+  gap: 12px;
+}
+
+.mode-summary,
+.empty-inline {
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: #f8faff;
+  border: 1px solid rgba(98, 116, 164, 0.08);
+  color: #5d6675;
+  line-height: 1.7;
+}
+
+.empty-inline {
+  color: #7b8494;
+  font-weight: 700;
+}
+
+.source-record {
+  padding: 14px;
+  border: 1px solid rgba(98, 116, 164, 0.08);
+  border-radius: 16px;
+  background: #fbfcff;
+}
+
+.source-record__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #465467;
+}
+
+.source-record p,
+.source-disclaimer {
+  margin: 8px 0 0;
+  color: #667085;
+  line-height: 1.7;
+}
+
+.source-record a {
+  display: inline-block;
+  margin-top: 8px;
+  color: #3b82f6;
+  font-weight: 700;
+}
+
 .day-list {
   display: grid;
   gap: 12px;
@@ -980,6 +1376,10 @@ async function handleEdit() {
   border: 1px solid rgba(98, 116, 164, 0.08);
   background: #fbfcff;
   overflow: hidden;
+}
+
+.day-card--dragging {
+  opacity: 0.55;
 }
 
 .day-card__header {
@@ -1017,6 +1417,16 @@ async function handleEdit() {
   margin-left: auto;
   color: #667085;
   font-size: 13px;
+}
+
+.drag-hint {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .day-card__body {
