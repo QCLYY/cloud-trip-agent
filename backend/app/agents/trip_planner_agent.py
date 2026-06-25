@@ -171,6 +171,7 @@ def generate_planner_draft(
     )
 
     human_prompt = f"""
+起始城市：{request.origin_city or '未指定'}
 目的地：{request.destination}
 出发日期：{request.start_date.isoformat()}
 结束日期：{request.end_date.isoformat()}

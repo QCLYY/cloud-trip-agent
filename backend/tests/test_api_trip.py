@@ -120,9 +120,9 @@ def test_generate_trip_returns_itinerary_successfully(client: TestClient) -> Non
     assert data["days"][0]["spots"][0]["source_type"] in {"estimate", "official_api"}
     assert data["days"][0]["spots"][0]["cost_source_type"] == "estimate"
     assert data["source_records"]
-    assert len(data["candidate_itineraries"]) == 2
+    assert len(data["candidate_itineraries"]) == 3
     candidate_ids = {candidate["candidate_id"] for candidate in data["candidate_itineraries"]}
-    assert candidate_ids == {"economy", "balanced"}
+    assert candidate_ids == {"economy", "balanced", "experience"}
     economy = next(candidate for candidate in data["candidate_itineraries"] if candidate["candidate_id"] == "economy")
     balanced = next(candidate for candidate in data["candidate_itineraries"] if candidate["candidate_id"] == "balanced")
     assert economy["estimated_budget"] <= balanced["estimated_budget"]

@@ -89,3 +89,26 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 TAVILY_API_URL = os.getenv("TAVILY_API_URL", "https://api.tavily.com/search")
 TAVILY_TIMEOUT_SECONDS = int(os.getenv("TAVILY_TIMEOUT_SECONDS", "20"))
 TAVILY_MAX_RETRIES = int(os.getenv("TAVILY_MAX_RETRIES", "1"))
+
+
+# Browser price observation. The tool is read-only and disabled by default.
+BROWSER_ENABLED = os.getenv("BROWSER_ENABLED", "false").lower() == "true"
+BROWSER_HEADLESS = os.getenv("BROWSER_HEADLESS", "true").lower() == "true"
+BROWSER_TIMEOUT_SECONDS = int(os.getenv("BROWSER_TIMEOUT_SECONDS", "30"))
+BROWSER_ALLOWED_DOMAINS = [
+    domain.strip().lower()
+    for domain in os.getenv("BROWSER_ALLOWED_DOMAINS", "*").split(",")
+    if domain.strip()
+]
+BROWSER_MAX_URLS = int(os.getenv("BROWSER_MAX_URLS", "4"))
+BROWSER_MAX_PRICE_ITEMS = int(os.getenv("BROWSER_MAX_PRICE_ITEMS", "8"))
+BROWSER_REQUIRE_HUMAN_ON_LOGIN = os.getenv("BROWSER_REQUIRE_HUMAN_ON_LOGIN", "true").lower() == "true"
+BROWSER_REQUIRE_HUMAN_ON_CAPTCHA = os.getenv("BROWSER_REQUIRE_HUMAN_ON_CAPTCHA", "true").lower() == "true"
+BROWSER_HUMAN_WAIT_SECONDS = int(os.getenv("BROWSER_HUMAN_WAIT_SECONDS", "60"))
+# Connect to an already-running Chrome via CDP (e.g. http://localhost:9222).
+# When set, this takes priority over launching a new browser.
+BROWSER_CDP_URL = os.getenv("BROWSER_CDP_URL", "").strip() or None
+# Path to a persistent Chrome user-data directory. When set and CDP is not used,
+# the browser is launched with a persistent profile that preserves cookies and
+# sessions across runs. Useful for keeping Ctrip login state.
+BROWSER_USER_DATA_DIR = os.getenv("BROWSER_USER_DATA_DIR", "").strip() or None

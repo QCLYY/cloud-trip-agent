@@ -30,6 +30,7 @@ from app.models.schemas import (  # noqa: E402
 def build_trip_request() -> TripRequest:
     '''构建一个示例 TripRequest 对象，用于测试'''
     return TripRequest(
+        origin_city="上海",
         destination="大理",
         start_date="2026-04-10",
         end_date="2026-04-12",
@@ -109,6 +110,7 @@ def test_trip_request_can_be_created_successfully() -> None:
     request = build_trip_request()
 
     assert request.destination == "大理"
+    assert request.origin_city == "上海"
     assert request.travelers == 2
     assert request.budget == 3200
     assert request.preferences == ["自然风景", "拍照", "美食"]

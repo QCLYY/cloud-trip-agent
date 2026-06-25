@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from typing import Any, TypedDict
 
 from app.agents.workflow.professional_agents import (
+    run_browser_price_agent,
     run_budget_engine,
     run_food_agent,
     run_hotel_agent,
@@ -17,10 +20,18 @@ from app.models.schemas import Itinerary, SourceRecord, SourceType, TripRequest
 
 
 LegacyGenerator = Callable[[TripRequest], Itinerary]
+ProfessionalAgentNode = Callable[[TripWorkflowState], TripWorkflowState]
 
 
 class _GraphState(TypedDict):
     state: TripWorkflowState
+
+
+@dataclass(frozen=True)
+class _ProfessionalAgentResult:
+    key: str
+    state: TripWorkflowState
+    error: str | None = None
 
 
 def supervisor_entry(state: TripWorkflowState) -> TripWorkflowState:
@@ -39,6 +50,7 @@ def requirement_agent(state: TripWorkflowState) -> TripWorkflowState:
     started_at = start_timer()
     request = state.request
     state.structured_requirement = {
+        "origin_city": request.origin_city,
         "destination": request.destination,
         "start_date": request.start_date.isoformat(),
         "end_date": request.end_date.isoformat(),
@@ -72,6 +84,7 @@ def planner_agent(state: TripWorkflowState) -> TripWorkflowState:
                 "food",
                 "weather",
                 "budget",
+                "browser_price",
             ],
             "dependencies": {
                 "itinerary_builder": [
@@ -82,6 +95,7 @@ def planner_agent(state: TripWorkflowState) -> TripWorkflowState:
                     "food",
                     "weather",
                     "budget",
+                    "browser_price",
                 ]
             },
             "parallel_tasks": [
@@ -91,7 +105,10 @@ def planner_agent(state: TripWorkflowState) -> TripWorkflowState:
                 "ticket",
                 "food",
                 "weather",
+                "budget",
+                "browser_price",
             ],
+            "execution_mode": "parallel_fanout_fanin",
             "candidate_strategy": ["economy", "balanced"],
         }
     )
@@ -104,18 +121,210 @@ def planner_agent(state: TripWorkflowState) -> TripWorkflowState:
     return state
 
 
+def _clone_state_for_parallel_agent(state: TripWorkflowState) -> TripWorkflowState:
+    return TripWorkflowState(
+        request=state.request,
+        user_id=state.user_id,
+        request_id=state.request_id,
+        trip_id=state.trip_id,
+        structured_requirement=dict(state.structured_requirement),
+        task_plan=dict(state.task_plan),
+        replan_count=state.replan_count,
+        selected_candidate=state.selected_candidate,
+        locked_items=list(state.locked_items),
+        rejected_items=list(state.rejected_items),
+        workflow_backend=state.workflow_backend,
+    )
+
+
+def _run_professional_agent_node(
+    *,
+    key: str,
+    label: str,
+    node: ProfessionalAgentNode,
+    parent_state: TripWorkflowState,
+) -> _ProfessionalAgentResult:
+    agent_state = _clone_state_for_parallel_agent(parent_state)
+    started_at = start_timer()
+    try:
+        return _ProfessionalAgentResult(key=key, state=node(agent_state))
+    except Exception as exc:
+        error_message = str(exc) or exc.__class__.__name__
+        agent_state.errors.append(f"{key}:{error_message}")
+        record_event(
+            agent_state,
+            agent=label,
+            status="failed",
+            started_at=started_at,
+            fallback=True,
+            error=error_message,
+        )
+        return _ProfessionalAgentResult(
+            key=key,
+            state=agent_state,
+            error=error_message,
+        )
+
+
 def run_professional_agents(state: TripWorkflowState) -> TripWorkflowState:
-    for node in (
-        run_transport_agent,
-        run_hotel_agent,
-        run_poi_agent,
-        run_ticket_agent,
-        run_food_agent,
-        run_weather_agent,
-        run_budget_engine,
-    ):
-        state = node(state)
+    started_at = start_timer()
+    nodes: tuple[tuple[str, str, ProfessionalAgentNode], ...] = (
+        ("transport", "Transport Agent", run_transport_agent),
+        ("hotel", "Hotel Agent", run_hotel_agent),
+        ("poi", "POI Agent", run_poi_agent),
+        ("ticket", "Ticket Agent", run_ticket_agent),
+        ("food", "Food Agent", run_food_agent),
+        ("weather", "Weather Agent", run_weather_agent),
+        ("budget", "Budget Engine", run_budget_engine),
+        ("browser_price", "Browser Price Agent", run_browser_price_agent),
+    )
+    results: dict[str, _ProfessionalAgentResult] = {}
+    max_workers = max(1, len(nodes))
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                _run_professional_agent_node,
+                key=key,
+                label=label,
+                node=node,
+                parent_state=state,
+            ): key
+            for key, label, node in nodes
+        }
+        for future in as_completed(futures):
+            key = futures[future]
+            results[key] = future.result()
+
+    for key, _, _ in nodes:
+        result = results[key]
+        state.agent_results.update(result.state.agent_results)
+        state.execution_events.extend(result.state.execution_events)
+        state.errors.extend(result.state.errors)
+
+    failed_agents = [key for key, result in results.items() if result.error]
+    record_event(
+        state,
+        agent="Professional Agents",
+        status="partial_success" if failed_agents else "success",
+        started_at=started_at,
+        fallback=bool(failed_agents),
+        error=";".join(failed_agents) if failed_agents else None,
+    )
     return state
+
+
+def _cost_source_types_from_days(itinerary: Itinerary) -> list[SourceType]:
+    source_types: list[SourceType] = []
+    for day in itinerary.days:
+        source_types.extend(spot.cost_source_type for spot in day.spots)
+        source_types.extend(meal.cost_source_type for meal in day.meals)
+        source_types.extend(transport.cost_source_type for transport in day.transport)
+        if day.hotel is not None:
+            source_types.append(day.hotel.cost_source_type)
+    return source_types
+
+
+def _refresh_budget_from_days(itinerary: Itinerary) -> None:
+    transport_total = round(
+        sum(item.estimated_cost for day in itinerary.days for item in day.transport),
+        2,
+    )
+    hotel_total = round(
+        sum(day.hotel.estimated_cost for day in itinerary.days if day.hotel is not None),
+        2,
+    )
+    meal_total = round(
+        sum(item.estimated_cost for day in itinerary.days for item in day.meals),
+        2,
+    )
+    ticket_total = round(
+        sum(item.estimated_cost for day in itinerary.days for item in day.spots),
+        2,
+    )
+    other_total = itinerary.budget_breakdown.other
+    itinerary.budget_breakdown.transport = transport_total
+    itinerary.budget_breakdown.hotel = hotel_total
+    itinerary.budget_breakdown.meals = meal_total
+    itinerary.budget_breakdown.tickets = ticket_total
+    itinerary.budget_breakdown.total = round(
+        transport_total + hotel_total + meal_total + ticket_total + other_total,
+        2,
+    )
+    if SourceType.browser_observed in _cost_source_types_from_days(itinerary):
+        itinerary.budget_breakdown.source_type = SourceType.browser_observed
+    itinerary.estimated_budget = itinerary.budget_breakdown.total
+
+
+def _apply_browser_price_observations(
+    state: TripWorkflowState,
+    itinerary: Itinerary,
+) -> None:
+    result = state.agent_results.get("browser_price", {})
+    source_records = result.get("source_records", []) or []
+    for record in source_records:
+        if isinstance(record, SourceRecord):
+            itinerary.source_records.append(record)
+
+    items = result.get("items", []) or []
+    if not items:
+        if result.get("requires_human"):
+            itinerary.tips.append(
+                "Browser price observation requires manual login or verification; "
+                "the itinerary keeps estimated prices for now."
+            )
+        return
+
+    applied: list[str] = []
+    applied_categories: set[str] = set()
+    first_day = itinerary.days[0] if itinerary.days else None
+    for item in items:
+        amount = item.get("amount")
+        if not isinstance(amount, (int, float)):
+            continue
+
+        category = item.get("category")
+        if category in applied_categories:
+            continue
+        price_text = item.get("price_text", str(amount))
+        if category == "hotel" and first_day and first_day.hotel is not None:
+            first_day.hotel.estimated_cost = float(amount)
+            first_day.hotel.source_type = SourceType.browser_observed
+            first_day.hotel.cost_source_type = SourceType.browser_observed
+            applied.append(f"hotel={price_text}")
+            applied_categories.add("hotel")
+        elif category == "transport" and first_day and first_day.transport:
+            first_day.transport[0].estimated_cost = float(amount)
+            first_day.transport[0].source_type = SourceType.browser_observed
+            first_day.transport[0].cost_source_type = SourceType.browser_observed
+            applied.append(f"transport={price_text}")
+            applied_categories.add("transport")
+        elif category == "ticket" and first_day and first_day.spots:
+            first_day.spots[0].estimated_cost = float(amount)
+            first_day.spots[0].source_type = SourceType.browser_observed
+            first_day.spots[0].cost_source_type = SourceType.browser_observed
+            applied.append(f"ticket={price_text}")
+            applied_categories.add("ticket")
+
+    if applied:
+        _refresh_budget_from_days(itinerary)
+        itinerary.source_notes.append(
+            "Browser observed prices were applied to itinerary cost fields: "
+            + ", ".join(applied[:5])
+        )
+    else:
+        itinerary.source_notes.append(
+            "Browser observed visible prices were captured as source records but were not mapped "
+            "to a specific itinerary cost field."
+        )
+
+    first_url = items[0].get("url") if items else None
+    if first_day is not None:
+        first_day.notes.append(
+            "Browser price observation added visible page prices to this plan; "
+            f"source: {first_url or 'submitted page'}."
+        )
+    itinerary.tips.append(result.get("notice") or "Browser observed prices are visible-page references only.")
 
 
 def itinerary_builder(
@@ -131,6 +340,8 @@ def itinerary_builder(
         for record in result.get("records", []) or []:
             if isinstance(record, SourceRecord):
                 itinerary.source_records.append(record)
+
+    _apply_browser_price_observations(state, itinerary)
 
     itinerary.source_records.append(
         SourceRecord(

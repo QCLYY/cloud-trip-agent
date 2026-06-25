@@ -29,9 +29,9 @@
 
 第一版明确不支持：
 
-- Browser 自动化。
-- Playwright 操作第三方网站。
-- 携程实时网页查询。
+- 自动预订型 Browser 自动化。
+- Playwright 登录、下单、支付或绕过验证码。
+- 携程实时库存、最终结算价或可预订结果查询。
 - 第三方网站自动登录。
 - 自动预订。
 - 自动支付。
@@ -55,10 +55,12 @@
 | `user_input` | 用户录入 |
 | `tavily` | Tavily 外部检索 |
 | `official_api` | 正式 API |
+| `browser_observed` | Browser 页面可见文本观察 |
 
 注意：
 
 - 本地演示数据、规则估算和 Tavily 摘要不能描述为实时价格、实时库存或可预订结果。
+- Browser 页面观察只代表当前打开页面中的可见价格文本，不代表实时库存、可预订结果或最终结算价。
 - Tavily 结果属于外部检索信息，写入行程前需要字段校验、去重和来源标记。
 - 预算、版本号、权限、日期和状态机等关键逻辑由确定性 Python 代码处理，不交给大模型自由计算。
 
@@ -288,6 +290,24 @@ python scripts/ingest_data.py
 ```
 
 Docker 场景下，SQLite 与 ChromaDB 持久化在后端数据库卷中；镜像内攻略文件保留在 `/app/data`，不会被 `backend_data:/app/data` 遮挡。
+
+## Browser 价格观察
+
+Browser 价格观察默认关闭。启用后，用户可在新建行程页填写起始城市、目的地和出行日期，后端会使用 Playwright 自动打开携程火车、机票、度假和首页入口，尝试填入城市日期并点击搜索，再读取当前页面可见文本并抽取价格。用户也可以额外填写公开网页 URL 作为补充观察来源。结果会以 `browser_observed` 来源写入行程来源记录，并在可识别时回填酒店、交通或门票的参考价格。
+
+`backend/.env` 示例：
+
+```env
+BROWSER_ENABLED=true
+BROWSER_HEADLESS=true
+BROWSER_ALLOWED_DOMAINS=*
+BROWSER_TIMEOUT_SECONDS=30
+BROWSER_MAX_URLS=4
+BROWSER_MAX_PRICE_ITEMS=8
+BROWSER_HUMAN_WAIT_SECONDS=60
+```
+
+边界说明：该能力不自动登录第三方网站、不绕过验证码、不点击预订或支付；页面观察价格不代表实时库存、可预订结果或最终结算价。本地调试时可设置 `BROWSER_HEADLESS=false`，遇到登录或验证码时浏览器窗口会等待 `BROWSER_HUMAN_WAIT_SECONDS`，由用户手动处理后继续读取页面；Docker 默认 headless，只会返回需要人工处理的状态并保留估算价格。
 
 ## 核心 API
 

@@ -65,7 +65,7 @@ def test_generate_trip_itinerary_returns_itinerary_object() -> None:
     assert itinerary.summary
     assert len(itinerary.days) == 3
     assert itinerary.budget_breakdown.total >= 0
-    assert len(itinerary.candidate_itineraries) == 2
+    assert len(itinerary.candidate_itineraries) == 3
 
 
 def test_generate_trip_itinerary_builds_day_plans_by_date_range() -> None:
@@ -173,3 +173,22 @@ def test_generate_trip_itinerary_includes_local_guide_context() -> None:
     assert len(itinerary.source_notes) >= 2
     assert "大理" in joined_notes
     assert "大理古城" in joined_spots or "大理 推荐景点" in joined_spots
+
+
+def test_generate_trip_itinerary_keeps_spots_inside_requested_destination() -> None:
+    request = build_trip_request().model_copy(
+        update={
+            "origin_city": "北京",
+            "destination": "上海",
+        }
+    )
+
+    itinerary = generate_trip_itinerary(request)
+    spot_names = [day.spots[0].name for day in itinerary.days if day.spots]
+    joined_spots = "\n".join(spot_names)
+
+    assert itinerary.destination == "上海"
+    assert any(name in joined_spots for name in ("外滩", "豫园", "南京路步行街", "陆家嘴"))
+    assert "大理古城" not in joined_spots
+    assert "喜洲古镇" not in joined_spots
+    assert "宽窄巷子" not in joined_spots

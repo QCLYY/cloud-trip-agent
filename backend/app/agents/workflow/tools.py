@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.agents.tools.browser_price_tool import observe_browser_prices
 from app.agents.tools.rag_tool import get_destination_guide_context
 from app.agents.tools.tavily_search_tool import search_tavily
 from app.models.schemas import SourceType, TripRequest
@@ -67,6 +68,10 @@ def budget_tool(request: TripRequest) -> dict[str, Any]:
     }
 
 
+def browser_price_tool(request: TripRequest) -> dict[str, Any]:
+    return observe_browser_prices(request)
+
+
 WHITELISTED_TOOL_NAMES = {
     "TavilySearchTool",
     "AmapPOITool",
@@ -77,4 +82,5 @@ WHITELISTED_TOOL_NAMES = {
     "DemoHotelTool",
     "DemoTicketTool",
     "BudgetTool",
+    "BrowserPriceObservationTool",
 }

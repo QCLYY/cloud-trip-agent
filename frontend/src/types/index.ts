@@ -1,4 +1,5 @@
 export interface TripRequestPayload {
+  origin_city?: string | null;
   destination: string;
   start_date: string;
   end_date: string;
@@ -9,6 +10,8 @@ export interface TripRequestPayload {
   dietary_preferences: string[];
   hotel_level?: string | null;
   special_notes?: string | null;
+  browser_price_enabled?: boolean;
+  price_observation_urls?: string[];
 }
 
 export interface TripEditPayload {
@@ -19,7 +22,13 @@ export interface TripEditPayload {
   preserve_constraints: string[];
 }
 
-export type SourceType = "demo" | "estimate" | "user_input" | "tavily" | "official_api";
+export type SourceType =
+  | "demo"
+  | "estimate"
+  | "user_input"
+  | "tavily"
+  | "official_api"
+  | "browser_observed";
 
 export interface SourceRecord {
   title: string;

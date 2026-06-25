@@ -14,6 +14,7 @@ class SourceType(str, Enum):
     user_input = "user_input"
     tavily = "tavily"
     official_api = "official_api"
+    browser_observed = "browser_observed"
 
 
 class SourceRecord(BaseModel):
@@ -30,6 +31,7 @@ class SourceRecord(BaseModel):
 class TripRequest(BaseModel):
     """用于生成新行程的请求体。"""
 
+    origin_city: str | None = Field(default=None, description="起始城市，例如上海")
     destination: str = Field(..., description="目的地，例如大理")
     start_date: DateType = Field(..., description="出行开始日期")
     end_date: DateType = Field(..., description="出行结束日期")
@@ -43,6 +45,11 @@ class TripRequest(BaseModel):
     )
     hotel_level: str | None = Field(default=None, description="酒店档次偏好")
     special_notes: str | None = Field(default=None, description="额外要求")
+    browser_price_enabled: bool = Field(default=False, description="Enable browser-based visible price observation")
+    price_observation_urls: list[str] = Field(
+        default_factory=list,
+        description="Optional public page URLs whose visible prices should be observed",
+    )
 
 
 class TripEditRequest(BaseModel):

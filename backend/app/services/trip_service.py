@@ -68,20 +68,94 @@ def _build_demo_spot_names(destination: str, rag_contexts: list[str], day_count:
     """从攻略片段里挑出更像样的演示景点名称。"""
     candidate_names: list[str] = []
     joined_context = "\n".join(rag_contexts)
+    catalog_names = _get_destination_spot_catalog(destination)
 
-    if "大理古城" in joined_context:
+    if catalog_names:
+        candidate_names.extend(catalog_names[:day_count])
+
+    if _spot_matches_destination("大理古城", destination) and "大理古城" in joined_context:
         candidate_names.append("大理古城")
-    if "喜洲古镇" in joined_context:
+    if _spot_matches_destination("喜洲古镇", destination) and "喜洲古镇" in joined_context:
         candidate_names.append("喜洲古镇")
-    if "崇圣寺三塔" in joined_context:
+    if _spot_matches_destination("崇圣寺三塔", destination) and "崇圣寺三塔" in joined_context:
         candidate_names.append("崇圣寺三塔")
-    if "洱海生态廊道" in joined_context:
+    if _spot_matches_destination("洱海生态廊道", destination) and "洱海生态廊道" in joined_context:
         candidate_names.append("洱海生态廊道")
+
+    deduped_names: list[str] = []
+    for name in candidate_names:
+        if name not in deduped_names:
+            deduped_names.append(name)
+    candidate_names = deduped_names
 
     while len(candidate_names) < day_count:
         candidate_names.append(f"{destination} 推荐景点 {len(candidate_names) + 1}")
 
     return candidate_names[:day_count]
+
+
+DESTINATION_SPOT_CATALOGS = {
+    "上海": ["外滩", "豫园", "南京路步行街", "陆家嘴", "上海博物馆", "田子坊"],
+    "大理": ["大理古城", "喜洲古镇", "崇圣寺三塔", "洱海生态廊道", "双廊古镇"],
+    "成都": ["宽窄巷子", "锦里古街", "武侯祠", "杜甫草堂", "成都大熊猫繁育研究基地"],
+    "杭州": ["西湖", "灵隐寺", "河坊街", "西溪湿地", "京杭大运河"],
+    "北京": ["故宫博物院", "天安门广场", "颐和园", "什刹海", "国家博物馆"],
+    "广州": ["陈家祠", "沙面岛", "广州塔", "越秀公园", "北京路步行街"],
+    "深圳": ["莲花山公园", "深圳湾公园", "南头古城", "华侨城创意文化园", "大梅沙海滨公园"],
+}
+
+DESTINATION_ALIASES = {
+    "上海": ["上海"],
+    "大理": ["大理", "云南"],
+    "成都": ["成都", "四川"],
+    "杭州": ["杭州", "浙江"],
+    "北京": ["北京"],
+    "广州": ["广州", "广东"],
+    "深圳": ["深圳", "广东"],
+}
+
+
+def _get_destination_spot_catalog(destination: str) -> list[str]:
+    normalized_destination = destination.strip()
+    for city, aliases in DESTINATION_ALIASES.items():
+        if any(alias in normalized_destination for alias in aliases):
+            return list(DESTINATION_SPOT_CATALOGS.get(city, []))
+    return []
+
+
+def _spot_matches_destination(spot_name: str, destination: str) -> bool:
+    normalized_spot = spot_name.strip()
+    normalized_destination = destination.strip()
+    if not normalized_spot:
+        return False
+    if normalized_destination and normalized_destination in normalized_spot:
+        return True
+
+    current_catalog = _get_destination_spot_catalog(normalized_destination)
+    if any(normalized_spot == name or normalized_spot in name or name in normalized_spot for name in current_catalog):
+        return True
+
+    for city, spot_names in DESTINATION_SPOT_CATALOGS.items():
+        aliases = DESTINATION_ALIASES.get(city, [city])
+        destination_matches_city = any(alias in normalized_destination for alias in aliases)
+        if destination_matches_city:
+            continue
+        if any(name in normalized_spot or normalized_spot in name for name in spot_names):
+            return False
+
+    return not current_catalog
+
+
+def _filter_contexts_for_destination(destination: str, rag_contexts: list[str]) -> list[str]:
+    filtered_contexts: list[str] = []
+    for context in rag_contexts:
+        if _spot_matches_destination(context, destination):
+            filtered_contexts.append(context)
+    return filtered_contexts
+
+
+def _destination_spot_description(destination: str, spot_name: str) -> str:
+    return f"{spot_name}位于{destination}，适合作为当天的核心游览点，行程会围绕该目的地安排交通、用餐和停留时间。"
 
 
 def _stable_bucket(text: str, modulo: int) -> int:
@@ -250,6 +324,7 @@ def _generate_trip_itinerary_legacy(request: TripRequest) -> Itinerary:
         pace=request.pace,
         special_notes=request.special_notes,
     )
+    rag_contexts = _filter_contexts_for_destination(request.destination, rag_contexts)
     llm_draft, planner_usage = generate_planner_draft(request, rag_contexts, day_count)
 
     token_usage = TokenUsage(
@@ -299,10 +374,18 @@ def _generate_trip_itinerary_legacy(request: TripRequest) -> Itinerary:
         if llm_draft is not None:
             llm_day = next((item for item in llm_draft.days if item.day_index == day_number), None)
 
-        spot_name = llm_day.spot_name if llm_day is not None else fallback_spot_names[index]
-        theme = llm_day.theme if llm_day is not None else f"{request.destination} 第 {day_number} 天轻松游"
+        proposed_spot_name = llm_day.spot_name if llm_day is not None else fallback_spot_names[index]
+        spot_name = proposed_spot_name
+        replaced_off_destination_spot = False
+        if not _spot_matches_destination(spot_name, request.destination):
+            spot_name = fallback_spot_names[index]
+            replaced_off_destination_spot = True
+
+        theme = llm_day.theme if llm_day is not None and not replaced_off_destination_spot else f"{request.destination} 第 {day_number} 天轻松游"
         spot_description = (
-            llm_day.spot_description
+            _destination_spot_description(request.destination, spot_name)
+            if replaced_off_destination_spot
+            else llm_day.spot_description
             if llm_day is not None
             else "根据本地攻略和旅行偏好安排，适合用半天时间慢慢游览。"
         )
@@ -313,7 +396,9 @@ def _generate_trip_itinerary_legacy(request: TripRequest) -> Itinerary:
             else "根据用户偏好和本地攻略预留的一条餐饮建议。"
         )
         daily_note = (
-            llm_day.daily_note
+            f"已将非{request.destination}目的地的景点替换为{spot_name}，避免行程跑偏。"
+            if replaced_off_destination_spot
+            else llm_day.daily_note
             if llm_day is not None
             else "今天以轻松游览为主，建议根据体力和天气灵活调整停留时间。"
         )
@@ -373,6 +458,7 @@ def _generate_trip_itinerary_legacy(request: TripRequest) -> Itinerary:
     )
 
     days: list[DayPlan] = []
+    origin_city = request.origin_city or request.destination
     for index, raw_day in enumerate(raw_days):
         spot_name = str(raw_day["spot_name"])
         day_plan = DayPlan(
@@ -406,7 +492,7 @@ def _generate_trip_itinerary_legacy(request: TripRequest) -> Itinerary:
             transport=[
                 TransportItem(
                     mode="打车",
-                    from_place=f"{request.destination} 出发点",
+                    from_place=f"{origin_city} 出发点" if index == 0 else f"{request.destination} 出发点",
                     to_place=spot_name,
                     estimated_cost=daily_transport_costs[index],
                     duration="30 分钟",
@@ -487,9 +573,9 @@ def generate_trip_itinerary(request: TripRequest, user_id: int | None = None) ->
             legacy_generator=_generate_trip_itinerary_legacy,
             user_id=user_id,
         )
-        return attach_candidate_itineraries(itinerary)
+        return attach_candidate_itineraries(itinerary, include_experience=True)
     except Exception:
-        return attach_candidate_itineraries(_generate_trip_itinerary_legacy(request))
+        return attach_candidate_itineraries(_generate_trip_itinerary_legacy(request), include_experience=True)
 
 
 def edit_trip_itinerary(request: TripEditRequest) -> Itinerary:

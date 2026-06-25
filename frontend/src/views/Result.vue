@@ -46,6 +46,7 @@ const sourceTypeLabels: Record<SourceType, string> = {
   user_input: "用户录入",
   tavily: "Tavily 检索",
   official_api: "正式 API",
+  browser_observed: "Browser 观察",
 };
 
 function sourceLabel(sourceType?: SourceType | null): string {
@@ -56,7 +57,12 @@ function sourceLabel(sourceType?: SourceType | null): string {
 }
 
 function isNonRealtimeSource(sourceType?: SourceType | null): boolean {
-  return sourceType === "demo" || sourceType === "estimate" || sourceType === "tavily";
+  return (
+    sourceType === "demo"
+    || sourceType === "estimate"
+    || sourceType === "tavily"
+    || sourceType === "browser_observed"
+  );
 }
 
 const sourceRecords = computed(() => props.itinerary?.source_records || []);
@@ -90,17 +96,29 @@ function formatWeatherDate(dateText?: string | null, week?: string | null): stri
   return [formatShortDate(dateText), weekday].filter(Boolean).join(" ");
 }
 
+function firstCostSource<T extends { cost_source_type?: SourceType }>(items: T[]): SourceType | undefined {
+  return (
+    items.find((item) => item.cost_source_type === "browser_observed")?.cost_source_type
+    || items.find((item) => item.cost_source_type)?.cost_source_type
+  );
+}
+
 const budgetItems = computed(() => {
   if (!props.itinerary) {
     return [];
   }
 
   const budget = props.itinerary.budget_breakdown;
+  const allSpots = props.itinerary.days.flatMap((day) => day.spots);
+  const allMeals = props.itinerary.days.flatMap((day) => day.meals);
+  const allTransport = props.itinerary.days.flatMap((day) => day.transport);
+  const allHotels = props.itinerary.days.flatMap((day) => (day.hotel ? [day.hotel] : []));
+
   return [
-    { label: "景点门票", value: `¥${budget.tickets.toFixed(0)}`, sourceType: budget.source_type },
-    { label: "酒店住宿", value: `¥${budget.hotel.toFixed(0)}`, sourceType: budget.source_type },
-    { label: "餐饮费用", value: `¥${budget.meals.toFixed(0)}`, sourceType: budget.source_type },
-    { label: "交通费用", value: `¥${budget.transport.toFixed(0)}`, sourceType: budget.source_type },
+    { label: "景点门票", value: `¥${budget.tickets.toFixed(0)}`, sourceType: firstCostSource(allSpots) || budget.source_type },
+    { label: "酒店住宿", value: `¥${budget.hotel.toFixed(0)}`, sourceType: firstCostSource(allHotels) || budget.source_type },
+    { label: "餐饮费用", value: `¥${budget.meals.toFixed(0)}`, sourceType: firstCostSource(allMeals) || budget.source_type },
+    { label: "交通费用", value: `¥${budget.transport.toFixed(0)}`, sourceType: firstCostSource(allTransport) || budget.source_type },
   ];
 });
 
@@ -799,7 +817,7 @@ function handleAssistantUpdated(updatedItinerary: Itinerary, versionNumber?: num
           </div>
           <div v-else class="empty-inline">当前行程暂时没有单独的来源记录。</div>
           <p class="source-disclaimer">
-            本地演示数据、规则估算和 Tavily 外部检索不代表实时价格、实时库存或可预订结果。
+            本地演示数据、规则估算、Tavily 外部检索和 Browser 页面观察不代表实时库存、可预订结果或最终结算价格。
           </p>
         </section>
       </template>
