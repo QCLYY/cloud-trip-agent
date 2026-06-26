@@ -682,6 +682,52 @@ def edit_trip_itinerary(request: TripEditRequest) -> Itinerary:
                         break
                 llm_edit_applied = _replaced
 
+            # Pattern: 酒店从/换成 X / 改为 X
+            _hotel = _re.search(
+                r"酒店(?:从.+?)?(?:换成|改为|改成|调整为)\s*(.+)",
+                request.user_instruction,
+            )
+            if _hotel and target_day.hotel:
+                _level = _hotel.group(1).strip().rstrip("。！，,.")
+                target_day.hotel.level = _level
+                target_day.hotel.name = f"{_level}酒店"
+                target_day.hotel.address = None
+                target_day.hotel.latitude = None
+                target_day.hotel.longitude = None
+                llm_edit_applied = True
+
+            # Pattern: 第X天和第Y天(对调|交换|互换)
+            _swap_days = _re.search(
+                r"第\s*(\d+)\s*天\s*(?:和|与|跟)\s*第\s*(\d+)\s*天\s*(?:对调|交换|互换|调换)",
+                request.user_instruction,
+            )
+            if _swap_days:
+                _d1 = int(_swap_days.group(1))
+                _d2 = int(_swap_days.group(2))
+                _day1 = next((d for d in updated_itinerary.days if d.day_index == _d1), None)
+                _day2 = next((d for d in updated_itinerary.days if d.day_index == _d2), None)
+                if _day1 is not None and _day2 is not None:
+                    # Swap day content but keep day_index
+                    _day1.theme, _day2.theme = _day2.theme, _day1.theme
+                    _day1.spots, _day2.spots = _day2.spots, _day1.spots
+                    _day1.meals, _day2.meals = _day2.meals, _day1.meals
+                    _day1.hotel, _day2.hotel = _day2.hotel, _day1.hotel
+                    _day1.transport, _day2.transport = _day2.transport, _day1.transport
+                    _day1.notes.append(f"已与第{_d2}天对调内容。")
+                    _day2.notes.append(f"已与第{_d1}天对调内容。")
+                    llm_edit_applied = True
+
+            # Pattern: 节奏(改成|改为|调整成|调整为) X
+            _pace = _re.search(
+                r"节奏(?:改成|改为|调整成|调整为|换成)\s*(.+)",
+                request.user_instruction,
+            )
+            if _pace:
+                _pace_val = _pace.group(1).strip().rstrip("。！，,.")
+                target_day.theme = f"{target_day.theme}（节奏：{_pace_val}）"
+                target_day.notes.append(f"已根据用户要求将节奏调整为：{_pace_val}。")
+                llm_edit_applied = True
+
             if "轻松" in request.user_instruction:
                 target_day.theme = f"{target_day.theme}（已调整为更轻松）"
                 target_day.notes.append("已根据用户要求把节奏调整得更轻松。")
@@ -694,6 +740,40 @@ def edit_trip_itinerary(request: TripEditRequest) -> Itinerary:
                 target_day.spots[0].latitude = None
                 target_day.spots[0].longitude = None
                 target_day.spots[0].poi_id = None
+
+    # ── Global rule-based patterns (not day-specific) ────────────────────
+    import re as _re_global
+
+    # Pattern: 预算(改成|改为|调整为|换成) N 元
+    _budget = _re_global.search(
+        r"预算(?:改成|改为|调整为|换成|调整到)\s*(\d+)\s*(?:元|块|块钱)?",
+        request.user_instruction,
+    )
+    if _budget:
+        _new_total = float(_budget.group(1))
+        if _new_total > 0:
+            _ratio = _new_total / max(updated_itinerary.estimated_budget, 1)
+            updated_itinerary.estimated_budget = _new_total
+            updated_itinerary.budget_breakdown.transport = round(
+                updated_itinerary.budget_breakdown.transport * _ratio, 2
+            )
+            updated_itinerary.budget_breakdown.hotel = round(
+                updated_itinerary.budget_breakdown.hotel * _ratio, 2
+            )
+            updated_itinerary.budget_breakdown.meals = round(
+                updated_itinerary.budget_breakdown.meals * _ratio, 2
+            )
+            updated_itinerary.budget_breakdown.tickets = round(
+                updated_itinerary.budget_breakdown.tickets * _ratio, 2
+            )
+            _new_other = _new_total - (
+                updated_itinerary.budget_breakdown.transport
+                + updated_itinerary.budget_breakdown.hotel
+                + updated_itinerary.budget_breakdown.meals
+                + updated_itinerary.budget_breakdown.tickets
+            )
+            updated_itinerary.budget_breakdown.other = max(0, round(_new_other, 2))
+            updated_itinerary.budget_breakdown.total = _new_total
 
     updated_itinerary.source_notes.append(
         f"已根据用户编辑指令更新行程：{request.user_instruction}"
