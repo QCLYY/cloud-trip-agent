@@ -11,6 +11,7 @@ from typing import Any, Callable, TypedDict
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.agents.assistant import AssistantLLMNotAvailable, run_primary_assistant
 from app.agents.tools.tavily_search_tool import search_tavily
 from app.models.db_models import Conversation, ConversationMessage
 from app.models.schemas import (
@@ -85,6 +86,10 @@ class AssistantWorkflowState:
     source_records: list[SourceRecord] = field(default_factory=list)
     execution_events: list[AgentExecutionEvent] = field(default_factory=list)
     assistant_message: ConversationMessageItem | None = None
+    # LLM-powered assistant integration
+    llm_result: dict[str, Any] | None = None
+    llm_used: bool = False
+    conversation_history: list[dict[str, str]] = field(default_factory=list)
 
 
 class _GraphState(TypedDict):
@@ -588,6 +593,158 @@ def _execute_unsupported(state: AssistantWorkflowState) -> None:
     _event(state, "AI Travel Consultant", "unsupported", started_at)
 
 
+# ── LLM-Powered Assistant Integration ─────────────────────────────────────
+
+
+def _load_conversation_history(state: AssistantWorkflowState) -> AssistantWorkflowState:
+    """Load recent conversation messages as context for the LLM assistant."""
+    if state.conversation is None:
+        state.conversation_history = []
+        return state
+    try:
+        messages = (
+            state.session.query(ConversationMessage)
+            .filter(
+                ConversationMessage.conversation_id == state.conversation.id,
+                ConversationMessage.user_id == state.user_id,
+            )
+            .order_by(ConversationMessage.created_at.desc(), ConversationMessage.id.desc())
+            .limit(10)
+            .all()
+        )
+        history = []
+        for msg in reversed(messages):
+            history.append({
+                "role": msg.role,
+                "content": msg.content[:300],
+            })
+        state.conversation_history = history
+    except Exception:
+        state.conversation_history = []
+    return state
+
+
+def _try_llm_assistant(state: AssistantWorkflowState) -> AssistantWorkflowState:
+    """Try LLM-powered assistant for intent detection and response generation.
+
+    When the user is not responding to an explicit confirmation, this attempts
+    to use the LLM with tool-call delegation. On failure, sets llm_used=False
+    so the existing rule-based pipeline takes over.
+    """
+    # Skip LLM when user is responding to a pending confirmation
+    if state.request.confirmation_id is not None:
+        state.llm_used = False
+        return state
+
+    started_at = time.perf_counter()
+    try:
+        result = run_primary_assistant(
+            user_message=state.request.message,
+            trip_detail=state.trip_detail,
+            conversation_history=state.conversation_history,
+        )
+        state.llm_result = result
+        state.llm_used = True
+        _event(state, "AI Travel Consultant (LLM)", "success", started_at,
+               tool=result.get("tool_called") or "LLM Direct Reply")
+    except AssistantLLMNotAvailable as exc:
+        state.llm_used = False
+        _event(state, "AI Travel Consultant (LLM)", "fallback",
+               started_at, fallback=True, error=str(exc)[:200])
+    return state
+
+
+def _apply_llm_result(state: AssistantWorkflowState) -> AssistantWorkflowState:
+    """Apply the LLM sub-agent result to the workflow state.
+
+    Routes the result to the appropriate handler. For modify_trip, calls the
+    external edit service. For other intents, uses the LLM-generated reply
+    directly.
+    """
+    if not state.llm_used or state.llm_result is None:
+        return state
+
+    result = state.llm_result
+    sub = result.get("sub_result") or {}
+    tool = result.get("tool_called", "")
+    started_at = time.perf_counter()
+
+    state.reply = result.get("reply", "")
+    state.intent = result.get("intent", AssistantIntent.general_travel_question)
+    state.source_records = result.get("source_records", [])
+
+    if tool == "ModifyTripRequest" and sub.get("needs_external_edit"):
+        # Use the existing external edit service
+        try:
+            current_itinerary = state.trip_detail.itinerary
+            edit_request = TripEditRequest(
+                trip_id=state.trip_detail.trip_id,
+                current_itinerary=current_itinerary,
+                user_instruction=sub.get("instruction", state.request.message),
+                edit_scope=sub.get("day_scope", "day_1"),
+                preserve_constraints=["保留目的地、日期、预算结构和已锁定行程项"],
+            )
+            updated = edit_trip_itinerary(edit_request)
+            saved_trip_id = save_itinerary(
+                updated, user_id=state.user_id, session=state.session,
+                change_type="assistant_modify",
+            )
+            if saved_trip_id != updated.trip_id:
+                updated = updated.model_copy(update={"trip_id": saved_trip_id})
+            state.trip_changed = True
+            state.updated_itinerary = updated
+            state.new_version_number = _latest_version_number(
+                state.session, saved_trip_id, state.user_id
+            )
+            state.reply = (
+                f"{state.reply}\n\n已保存修改，新版本号为 {state.new_version_number}。"
+            )
+            state.message_type = ConversationMessageType.trip_update
+            state.structured_payload = {
+                "change_summary": sub.get("instruction", ""),
+                "new_version_number": state.new_version_number,
+                "trip_id": saved_trip_id,
+            }
+            _event(state, "AI Travel Consultant", "success", started_at,
+                   tool="TripEditService", source_type=SourceType.estimate)
+        except Exception as exc:
+            state.reply = f"抱歉，修改行程时遇到问题：{exc}。请换个方式描述您的修改需求。"
+            state.message_type = ConversationMessageType.error
+            _event(state, "AI Travel Consultant", "error", started_at,
+                   tool="TripEditService", error=str(exc)[:200])
+    elif tool == "TravelInfoRequest":
+        state.message_type = ConversationMessageType.explanation
+        state.structured_payload = {
+            "source_count": len(state.source_records),
+            "used_tavily": sub.get("used_tavily", False),
+        }
+        _event(state, "AI Travel Consultant", "success", started_at,
+               tool="TravelInfoAgent",
+               source_type=SourceType.tavily if sub.get("used_tavily") else SourceType.demo)
+    elif tool == "QueryTripRequest":
+        state.message_type = ConversationMessageType.text
+        state.structured_payload = {"query_type": "llm_deterministic"}
+        _event(state, "AI Travel Consultant", "success", started_at, tool="TripQueryAgent")
+    elif tool == "ExplainPlanRequest":
+        state.message_type = ConversationMessageType.explanation
+        state.structured_payload = {"explanation_type": "llm_explain"}
+        _event(state, "AI Travel Consultant", "success", started_at, tool="TripExplainer")
+    elif tool == "ConfirmActionRequest":
+        state.message_type = ConversationMessageType.confirmation
+        state.structured_payload = {"action": sub.get("action", "unknown")}
+        state.confirmation_required = False
+        _event(state, "AI Travel Consultant", "success", started_at, tool="ConfirmationAgent")
+    else:
+        # Direct reply from LLM (no tool call) — friendly chat
+        state.message_type = ConversationMessageType.text
+        state.structured_payload = {"llm_direct": True}
+
+    return state
+
+
+# ── Original Pipeline Nodes ───────────────────────────────────────────────
+
+
 def _load_trip_context(state: AssistantWorkflowState) -> AssistantWorkflowState:
     started_at = time.perf_counter()
     init_db(state.session)
@@ -669,8 +826,14 @@ def _persist_messages_node(state: AssistantWorkflowState) -> AssistantWorkflowSt
 
 def _run_sequential(state: AssistantWorkflowState) -> AssistantWorkflowState:
     state = _load_trip_context(state)
-    state = _detect_intent_node(state)
-    state = _execute_intent_node(state)
+    state = _load_conversation_history(state)
+    state = _try_llm_assistant(state)
+    if state.llm_used:
+        state = _apply_llm_result(state)
+    else:
+        # Fall back to rule-based intent detection and execution
+        state = _detect_intent_node(state)
+        state = _execute_intent_node(state)
     return _persist_messages_node(state)
 
 
@@ -688,11 +851,26 @@ def _run_langgraph(state: AssistantWorkflowState) -> AssistantWorkflowState | No
 
     graph = StateGraph(_GraphState)
     graph.add_node("load_trip_context", wrap(_load_trip_context))
+    graph.add_node("load_history", wrap(_load_conversation_history))
+    graph.add_node("try_llm", wrap(_try_llm_assistant))
+    graph.add_node("apply_llm", wrap(_apply_llm_result))
     graph.add_node("detect_intent", wrap(_detect_intent_node))
     graph.add_node("execute_intent", wrap(_execute_intent_node))
     graph.add_node("persist_message", wrap(_persist_messages_node))
     graph.set_entry_point("load_trip_context")
-    graph.add_edge("load_trip_context", "detect_intent")
+    graph.add_edge("load_trip_context", "load_history")
+    graph.add_edge("load_history", "try_llm")
+
+    # Conditional: if LLM was used, skip rule-based intent detection
+    def _after_llm(graph_state: _GraphState) -> str:
+        s = graph_state["state"]
+        return "apply_llm" if s.llm_used else "detect_intent"
+
+    graph.add_conditional_edges("try_llm", _after_llm, {
+        "apply_llm": "apply_llm",
+        "detect_intent": "detect_intent",
+    })
+    graph.add_edge("apply_llm", "persist_message")
     graph.add_edge("detect_intent", "execute_intent")
     graph.add_edge("execute_intent", "persist_message")
     graph.add_edge("persist_message", END)
