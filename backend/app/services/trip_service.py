@@ -573,6 +573,11 @@ def generate_trip_itinerary(request: TripRequest, user_id: int | None = None) ->
             legacy_generator=_generate_trip_itinerary_legacy,
             user_id=user_id,
         )
+        itinerary = _maybe_enrich_itinerary_with_map_data(
+            itinerary,
+            city=request.destination,
+            request_budget=request.budget,
+        )
         return attach_candidate_itineraries(itinerary, include_experience=True)
     except Exception:
         return attach_candidate_itineraries(_generate_trip_itinerary_legacy(request), include_experience=True)
