@@ -12,7 +12,10 @@ import {
   navigateBrowser,
   saveTrip,
 } from "../services/api";
+import { useItineraryStore } from "../stores/itinerary";
 import type { CandidateItinerary, DayPlan, Itinerary, SourceType, WeatherForecastResponse } from "../types";
+
+const itineraryStore = useItineraryStore();
 
 const props = defineProps<{
   itinerary: Itinerary | null;
@@ -22,7 +25,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   backHome: [];
   viewHistory: [];
-  updated: [itinerary: Itinerary];
 }>();
 
 const saving = ref(false);
@@ -278,7 +280,7 @@ function applyCandidate(candidate: CandidateItinerary) {
     return;
   }
   pendingChangeType.value = "candidate_select";
-  emit("updated", {
+  itineraryStore.set( {
     ...props.itinerary,
     summary: candidate.summary,
     days: candidate.days,
@@ -322,7 +324,7 @@ function handleDayDrop(targetDayIndex: number) {
   });
   pendingChangeType.value = "drag_edit";
   draggedDayIndex.value = null;
-  emit("updated", updated);
+  itineraryStore.set( updated);
   message.success("日程顺序已调整，保存后会生成拖拽编辑版本。");
 }
 
@@ -390,7 +392,7 @@ async function openPdfExport() {
     const saveResponse = await saveTrip(itineraryToExport);
     const exportTripId = saveResponse.trip_id;
     if (exportTripId !== itineraryToExport.trip_id) {
-      emit("updated", { ...itineraryToExport, trip_id: exportTripId });
+      itineraryStore.set( { ...itineraryToExport, trip_id: exportTripId });
     }
     const pdfBlob = await exportTripPdf(exportTripId);
     openBlobExport(pdfBlob, `${exportTripId}.pdf`, exportWindow);
@@ -415,7 +417,7 @@ async function openMarkdownExport() {
     const saveResponse = await saveTrip(itineraryToExport);
     const exportTripId = saveResponse.trip_id;
     if (exportTripId !== itineraryToExport.trip_id) {
-      emit("updated", { ...itineraryToExport, trip_id: exportTripId });
+      itineraryStore.set( { ...itineraryToExport, trip_id: exportTripId });
     }
     const markdownBlob = await exportTripMarkdown(exportTripId);
     openBlobExport(markdownBlob, `${exportTripId}.md`, exportWindow);
@@ -473,7 +475,7 @@ async function handleSave() {
   try {
     const saveResponse = await saveTrip(itineraryToSave, pendingChangeType.value);
     if (saveResponse.trip_id !== itineraryToSave.trip_id) {
-      emit("updated", { ...itineraryToSave, trip_id: saveResponse.trip_id });
+      itineraryStore.set( { ...itineraryToSave, trip_id: saveResponse.trip_id });
     }
     pendingChangeType.value = "manual_save";
     message.success("行程已保存，可以去历史列表查看。");
@@ -505,7 +507,7 @@ async function handleEdit() {
       edit_scope: editScope.value,
       preserve_constraints: ["保留预算结构", "保留目的地和旅行日期"],
     });
-    emit("updated", updatedItinerary);
+    itineraryStore.set( updatedItinerary);
     message.success("行程已智能调整。");
   } catch (error) {
     console.error(error);
@@ -516,7 +518,7 @@ async function handleEdit() {
 }
 
 function handleAssistantUpdated(updatedItinerary: Itinerary, versionNumber?: number | null) {
-  emit("updated", updatedItinerary);
+  itineraryStore.set( updatedItinerary);
   if (versionNumber) {
     message.success(`AI 旅行顾问已生成版本 ${versionNumber}`);
   }

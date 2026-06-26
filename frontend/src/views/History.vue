@@ -2,6 +2,7 @@
 import { message } from "ant-design-vue";
 import { onMounted, ref, watch } from "vue";
 
+import { useRouter } from "vue-router";
 import {
   deleteTrip,
   getTripDetail,
@@ -9,14 +10,14 @@ import {
   listTrips,
   restoreTripVersion,
 } from "../services/api";
+import { useItineraryStore } from "../stores/itinerary";
 import type { Itinerary, TripSummaryItem, TripVersionSummary } from "../types";
+
+const router = useRouter();
+const itineraryStore = useItineraryStore();
 
 const props = defineProps<{
   active: boolean;
-}>();
-
-const emit = defineEmits<{
-  openTrip: [itinerary: Itinerary];
 }>();
 
 const loading = ref(false);
@@ -41,7 +42,8 @@ async function loadTrips() {
 async function openTrip(tripId: string) {
   try {
     const response = await getTripDetail(tripId);
-    emit("openTrip", response.itinerary);
+    itineraryStore.set(response.itinerary);
+    void router.push({ name: "result" });
     message.success("已加载已保存行程。");
   } catch (error) {
     console.error(error);
@@ -98,7 +100,8 @@ async function restoreVersion(tripId: string, versionNumber: number) {
   }
   try {
     const response = await restoreTripVersion(tripId, versionNumber);
-    emit("openTrip", response.itinerary);
+    itineraryStore.set(response.itinerary);
+    void router.push({ name: "result" });
     message.success(`已恢复版本 ${versionNumber}，并生成新版本 ${response.new_version_number}。`);
   } catch (error) {
     console.error(error);

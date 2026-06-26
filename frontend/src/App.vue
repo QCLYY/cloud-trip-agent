@@ -1,16 +1,19 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import { RouterView, useRoute, useRouter } from "vue-router";
 
 import { useAuthStore } from "./stores/auth";
-import type { Itinerary } from "./types";
+import { useItineraryStore } from "./stores/itinerary";
 
 
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
+const itineraryStore = useItineraryStore();
 
-const latestItinerary = ref<Itinerary | null>(null);
+function hasItinerary() {
+  return itineraryStore.current !== null;
+}
 
 const currentRouteName = computed(() => String(route.name || ""));
 const resultRouteNames = ["result", "sources", "agentStatus"];
@@ -30,34 +33,16 @@ const isAuthPage = computed(() => {
 
 
 function goToRoute(name: "home" | "result" | "sources" | "agentStatus" | "history" | "memory") {
-  if (resultRouteNames.includes(name) && !latestItinerary.value) {
+  if (resultRouteNames.includes(name) && !hasItinerary()) {
     return;
   }
   void router.push({ name });
 }
 
 
-function handleGenerated(itinerary: Itinerary) {
-  latestItinerary.value = itinerary;
-  void router.push({ name: "result" });
-}
-
-
-function openTrip(itinerary: Itinerary) {
-  latestItinerary.value = itinerary;
-  void router.push({ name: "result" });
-}
-
-
-function updateCurrentItinerary(itinerary: Itinerary) {
-  latestItinerary.value = itinerary;
-  void router.push({ name: "result" });
-}
-
-
 function handleLogout() {
   authStore.logout();
-  latestItinerary.value = null;
+  itineraryStore.clear();
   void router.replace({ name: "login" });
 }
 </script>
@@ -90,9 +75,9 @@ function handleLogout() {
           :class="[
             'hero__tab',
             { 'hero__tab--active': currentRouteName === 'result' },
-            { 'hero__tab--disabled': !latestItinerary }
+            { 'hero__tab--disabled': !hasItinerary() }
           ]"
-          :disabled="!latestItinerary"
+          :disabled="!hasItinerary()"
           type="button"
           @click="goToRoute('result')"
         >
@@ -102,9 +87,9 @@ function handleLogout() {
           :class="[
             'hero__tab',
             { 'hero__tab--active': currentRouteName === 'sources' },
-            { 'hero__tab--disabled': !latestItinerary }
+            { 'hero__tab--disabled': !hasItinerary() }
           ]"
-          :disabled="!latestItinerary"
+          :disabled="!hasItinerary()"
           type="button"
           @click="goToRoute('sources')"
         >
@@ -114,9 +99,9 @@ function handleLogout() {
           :class="[
             'hero__tab',
             { 'hero__tab--active': currentRouteName === 'agentStatus' },
-            { 'hero__tab--disabled': !latestItinerary }
+            { 'hero__tab--disabled': !hasItinerary() }
           ]"
-          :disabled="!latestItinerary"
+          :disabled="!hasItinerary()"
           type="button"
           @click="goToRoute('agentStatus')"
         >
@@ -144,22 +129,19 @@ function handleLogout() {
         <component
           :is="Component"
           v-if="currentRouteName === 'home'"
-          @generated="handleGenerated"
         />
         <component
           :is="Component"
           v-else-if="isResultRoute"
-          :itinerary="latestItinerary"
+          :itinerary="itineraryStore.current"
           :mode="resultMode"
           @back-home="goToRoute('home')"
           @view-history="goToRoute('history')"
-          @updated="updateCurrentItinerary"
         />
         <component
           :is="Component"
           v-else-if="currentRouteName === 'history'"
           :active="currentRouteName === 'history'"
-          @open-trip="openTrip"
         />
         <component :is="Component" v-else-if="currentRouteName === 'memory'" />
         <component :is="Component" v-else />
