@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.routes.auth import router as auth_router
 from app.api.routes.assistant import router as assistant_router
+from app.api.routes.browser import router as browser_router
 from app.api.routes.confirmations import router as confirmations_router
 from app.api.routes.export import router as export_router
 from app.api.routes.memory import router as memory_router
@@ -80,3 +81,4 @@ app.include_router(auth_router)
 app.include_router(memory_router)
 app.include_router(confirmations_router)
 app.include_router(assistant_router)
+app.include_router(browser_router)

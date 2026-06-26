@@ -47,8 +47,6 @@ const formState = reactive({
   preferences: ["自然风景", "拍照", "美食"],
   dietaryPreferences: ["少辣"],
   notes: "不想太早起床，希望安排一个适合看日落的地点。",
-  browserPriceEnabled: false,
-  priceObservationUrls: "",
 });
 
 const isSubmitting = ref(false);
@@ -61,11 +59,6 @@ const dayCount = computed(() => {
 });
 
 async function handleSubmit() {
-  const priceObservationUrls = formState.priceObservationUrls
-    .split(/\r?\n/)
-    .map((url) => url.trim())
-    .filter(Boolean);
-
   const payload: TripRequestPayload = {
     origin_city: formState.originCity,
     destination: formState.destination,
@@ -78,8 +71,6 @@ async function handleSubmit() {
     dietary_preferences: formState.dietaryPreferences,
     hotel_level: formState.hotelLevel,
     special_notes: formState.notes,
-    browser_price_enabled: formState.browserPriceEnabled,
-    price_observation_urls: priceObservationUrls,
   };
 
   isSubmitting.value = true;
@@ -206,20 +197,6 @@ async function handleSubmit() {
     <div class="planner-card">
       <div class="section-title">
         <span class="section-title__icon">🌐</span>
-        <span>Browser 价格观察</span>
-      </div>
-      <a-checkbox v-model:checked="formState.browserPriceEnabled">
-        启用携程网页价格观察
-      </a-checkbox>
-      <a-textarea
-        v-model:value="formState.priceObservationUrls"
-        :rows="3"
-        class="browser-price-textarea"
-        placeholder="可选：每行补充一个公开页面 URL。留空时会根据起始城市、目的地和日期自动尝试携程火车、机票、度假入口"
-      />
-      <div class="browser-price-hint">
-        会尝试打开携程火车、机票、度假页面并填入城市日期；只读取页面可见价格文本，不自动登录、不绕验证码、不点击预订或支付。
-      </div>
     </div>
 
     <div class="submit-panel">
@@ -288,17 +265,6 @@ async function handleSubmit() {
 
 .checkbox-area {
   margin-top: 18px;
-}
-
-.browser-price-textarea {
-  margin-top: 14px;
-}
-
-.browser-price-hint {
-  margin-top: 10px;
-  color: #667085;
-  font-size: 13px;
-  line-height: 1.7;
 }
 
 .submit-panel {

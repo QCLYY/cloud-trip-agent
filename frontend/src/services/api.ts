@@ -3,6 +3,8 @@ import axios from "axios";
 import type {
   AuthRequestPayload,
   AuthUser,
+  BrowserNavigatePayload,
+  BrowserNavigateResponse,
   HumanConfirmationItem,
   HumanConfirmationListResponse,
   Itinerary,
@@ -218,6 +220,13 @@ export async function exportTripPdf(tripId: string): Promise<Blob> {
     `/export/${encodeURIComponent(tripId)}/pdf`,
     { responseType: "blob" },
   );
+  return response.data;
+}
+
+export async function navigateBrowser(
+  payload: BrowserNavigatePayload,
+): Promise<BrowserNavigateResponse> {
+  const response = await api.post<BrowserNavigateResponse>("/browser/navigate", payload);
   return response.data;
 }
 

@@ -9,6 +9,7 @@ import {
   exportTripMarkdown,
   exportTripPdf,
   fetchWeatherForecast,
+  navigateBrowser,
   saveTrip,
 } from "../services/api";
 import type { CandidateItinerary, DayPlan, Itinerary, SourceType, WeatherForecastResponse } from "../types";
@@ -427,6 +428,41 @@ async function openMarkdownExport() {
   }
 }
 
+const navigateLoading = ref("");
+const navigateError = ref("");
+
+function getTripDates() {
+  if (!props.itinerary) return { start: "", end: "" };
+  const days = props.itinerary.days;
+  return {
+    start: days[0]?.date || "",
+    end: days[days.length - 1]?.date || "",
+  };
+}
+
+async function handleNavigate(category: "flight" | "train" | "hotel" | "vacation") {
+  if (!props.itinerary) return;
+  navigateLoading.value = category;
+  navigateError.value = "";
+  try {
+    const dates = getTripDates();
+    const result = await navigateBrowser({
+      category,
+      origin_city: props.itinerary.days[0]?.transport?.[0]?.from_place || "",
+      destination: props.itinerary.destination,
+      start_date: dates.start,
+      end_date: dates.end,
+    });
+    message.success(result.message);
+  } catch (error: any) {
+    const detail = error?.response?.data?.detail || "浏览器启动失败";
+    navigateError.value = detail;
+    message.error(detail);
+  } finally {
+    navigateLoading.value = "";
+  }
+}
+
 async function handleSave() {
   const itineraryToSave = buildVisibleItinerary();
   if (!itineraryToSave) {
@@ -627,6 +663,45 @@ function handleAssistantUpdated(updatedItinerary: Itinerary, versionNumber?: num
           </article>
         </div>
         <div v-else class="weather-state">暂无天气信息。</div>
+      </section>
+
+      <section class="result-card result-card--browser">
+        <div class="result-card__title">实时价格参考</div>
+        <p class="browser-hint">
+          点击下方按钮，系统会在 Edge 浏览器中打开携程对应页面并自动填入目的地和日期。
+          价格请以页面实际显示为准，仅供出行参考。
+        </p>
+        <div class="browser-nav-buttons">
+          <button
+            class="browser-nav-btn browser-nav-btn--flight"
+            :disabled="navigateLoading === 'flight'"
+            @click="handleNavigate('flight')"
+          >
+            {{ navigateLoading === "flight" ? "打开中..." : "✈ 航班" }}
+          </button>
+          <button
+            class="browser-nav-btn browser-nav-btn--train"
+            :disabled="navigateLoading === 'train'"
+            @click="handleNavigate('train')"
+          >
+            {{ navigateLoading === "train" ? "打开中..." : "🚄 高铁/火车" }}
+          </button>
+          <button
+            class="browser-nav-btn browser-nav-btn--hotel"
+            :disabled="navigateLoading === 'hotel'"
+            @click="handleNavigate('hotel')"
+          >
+            {{ navigateLoading === "hotel" ? "打开中..." : "🏨 酒店" }}
+          </button>
+          <button
+            class="browser-nav-btn browser-nav-btn--vacation"
+            :disabled="navigateLoading === 'vacation'"
+            @click="handleNavigate('vacation')"
+          >
+            {{ navigateLoading === "vacation" ? "打开中..." : "🎫 度假/门票" }}
+          </button>
+        </div>
+        <div v-if="navigateError" class="browser-nav-error">{{ navigateError }}</div>
       </section>
 
       <section class="result-card result-card--full">
@@ -1497,6 +1572,81 @@ function handleAssistantUpdated(updatedItinerary: Itinerary, versionNumber?: num
   line-height: 1.7;
 }
 
+.result-card--browser {
+  grid-column: 1 / -1;
+}
+
+.browser-hint {
+  margin: 0 0 16px;
+  padding: 11px 14px;
+  border-radius: 12px;
+  background: rgba(59, 130, 246, 0.06);
+  border: 1px solid rgba(59, 130, 246, 0.12);
+  color: #3b5f8a;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.browser-nav-buttons {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.browser-nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 52px;
+  border: none;
+  border-radius: 14px;
+  padding: 12px 16px;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.browser-nav-btn--flight {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #ffffff;
+}
+
+.browser-nav-btn--train {
+  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+  color: #ffffff;
+}
+
+.browser-nav-btn--hotel {
+  background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+  color: #ffffff;
+}
+
+.browser-nav-btn--vacation {
+  background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+  color: #1a3a2a;
+}
+
+.browser-nav-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.browser-nav-btn:not(:disabled):hover {
+  opacity: 0.9;
+}
+
+.browser-nav-error {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(245, 87, 108, 0.08);
+  color: #c0392b;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 @media (max-width: 960px) {
   .result-page {
     grid-template-columns: 1fr;
@@ -1508,6 +1658,10 @@ function handleAssistantUpdated(updatedItinerary: Itinerary, versionNumber?: num
 
   .edit-panel__controls {
     grid-template-columns: 1fr;
+  }
+
+  .browser-nav-buttons {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

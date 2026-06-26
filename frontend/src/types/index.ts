@@ -336,3 +336,17 @@ export interface ConversationClearResponse {
   trip_id: string;
   deleted_count: number;
 }
+
+export interface BrowserNavigatePayload {
+  category: "flight" | "train" | "hotel" | "vacation";
+  origin_city?: string;
+  destination?: string;
+  start_date?: string;
+  end_date?: string;
+}
+
+export interface BrowserNavigateResponse {
+  status: string;
+  url: string | null;
+  message: string;
+}
