@@ -112,3 +112,6 @@ BROWSER_CDP_URL = os.getenv("BROWSER_CDP_URL", "").strip() or None
 # the browser is launched with a persistent profile that preserves cookies and
 # sessions across runs. Useful for keeping Ctrip login state.
 BROWSER_USER_DATA_DIR = os.getenv("BROWSER_USER_DATA_DIR", "").strip() or None
+# Browser channel override. Set to "msedge" to use system Microsoft Edge instead of
+# downloading Chromium. Leave empty to use Playwright's bundled Chromium.
+BROWSER_CHANNEL = os.getenv("BROWSER_CHANNEL", "").strip() or None

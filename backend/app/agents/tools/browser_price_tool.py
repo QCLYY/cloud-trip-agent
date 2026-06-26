@@ -420,6 +420,7 @@ def observe_browser_prices(request: TripRequest) -> dict[str, Any]:
                 context = playwright.chromium.launch_persistent_context(
                     user_data_dir=config.BROWSER_USER_DATA_DIR,
                     headless=config.BROWSER_HEADLESS,
+                    channel=config.BROWSER_CHANNEL,
                     locale="zh-CN",
                     viewport={"width": 1365, "height": 900},
                     args=[
@@ -433,6 +434,7 @@ def observe_browser_prices(request: TripRequest) -> dict[str, Any]:
             else:
                 browser = playwright.chromium.launch(
                     headless=config.BROWSER_HEADLESS,
+                    channel=config.BROWSER_CHANNEL,
                     args=[
                         "--disable-dev-shm-usage",
                         "--no-sandbox",
