@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from datetime import date as DateType, timedelta
 
 from app.agents.workflow.trip_workflow import run_trip_generation_workflow
+
+logger = logging.getLogger(__name__)
 from app.agents.trip_planner_agent import (
     collect_trip_context,
     generate_day_edit_draft,
@@ -337,31 +340,15 @@ def _generate_trip_itinerary_legacy(request: TripRequest) -> Itinerary:
         rerank_prompt_tokens=rerank_usage.get("prompt_tokens", 0),
         rerank_completion_tokens=rerank_usage.get("completion_tokens", 0),
     )
-    print(
-        "[token_usage] Query Rewrite: "
-        f"prompt={token_usage.rewrite_prompt_tokens}, "
-        f"completion={token_usage.rewrite_completion_tokens}"
-    )
-    print(
-        "[token_usage] Rerank: "
-        f"prompt={token_usage.rerank_prompt_tokens}, "
-        f"completion={token_usage.rerank_completion_tokens}"
-    )
-    print(
-        "[token_usage] Query Embedding: "
-        f"prompt={token_usage.embedding_prompt_tokens}, "
-        f"completion={token_usage.embedding_completion_tokens}"
-    )
-    print(
-        "[token_usage] Planner: "
-        f"prompt={token_usage.planner_prompt_tokens}, "
-        f"completion={token_usage.planner_completion_tokens}"
-    )
-    print(
-        "[token_usage] Total: "
-        f"prompt={token_usage.total_prompt_tokens}, "
-        f"completion={token_usage.total_completion_tokens}, "
-        f"all={token_usage.total_tokens}"
+    logger.info(
+        "token_usage: rewrite p=%s c=%s, rerank p=%s c=%s, embed p=%s c=%s, "
+        "planner p=%s c=%s, total p=%s c=%s all=%s",
+        token_usage.rewrite_prompt_tokens, token_usage.rewrite_completion_tokens,
+        token_usage.rerank_prompt_tokens, token_usage.rerank_completion_tokens,
+        token_usage.embedding_prompt_tokens, token_usage.embedding_completion_tokens,
+        token_usage.planner_prompt_tokens, token_usage.planner_completion_tokens,
+        token_usage.total_prompt_tokens, token_usage.total_completion_tokens,
+        token_usage.total_tokens,
     )
     fallback_spot_names = _build_demo_spot_names(request.destination, rag_contexts, day_count)
 

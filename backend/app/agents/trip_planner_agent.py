@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from pydantic import BaseModel, Field
 
@@ -13,6 +14,8 @@ from app.config import (
     LLM_TIMEOUT_SECONDS,
 )
 from app.models.schemas import DayPlan, TripEditRequest, TripRequest
+
+logger = logging.getLogger(__name__)
 
 
 class PlannerDayDraft(BaseModel):
@@ -217,11 +220,7 @@ JSON 结构示例：
 }}
 """
 
-    print("[trip_planner_agent] 准备调用大模型...")
-    print(f"[trip_planner_agent] model = {LLM_MODEL}")
-    print(f"[trip_planner_agent] base_url = {LLM_BASE_URL or '<DEFAULT>'}")
-    print(f"[trip_planner_agent] timeout = {LLM_TIMEOUT_SECONDS}s")
-    print(f"[trip_planner_agent] max_retries = {LLM_MAX_RETRIES}")
+    logger.info("准备调用大模型：model=%s base_url=%s timeout=%ss max_retries=%s", LLM_MODEL, LLM_BASE_URL or '<DEFAULT>', LLM_TIMEOUT_SECONDS, LLM_MAX_RETRIES)
 
     try:
         response = llm.invoke(
@@ -231,11 +230,11 @@ JSON 结构示例：
             ]
         )
     except Exception as exc:
-        print(f"[trip_planner_agent] 大模型调用失败: {type(exc).__name__}: {exc}")
+        logger.warning("大模型调用失败: %s: %s", type(exc).__name__, exc)
         return None, empty_usage
 
     token_usage = _extract_token_usage(response)
-    print(f"[trip_planner_agent] 大模型调用完成。token: prompt={token_usage['prompt_tokens']}, completion={token_usage['completion_tokens']}")
+    logger.info("大模型调用完成。token: prompt=%s, completion=%s", token_usage['prompt_tokens'], token_usage['completion_tokens'])
 
     raw_text = getattr(response, "content", "")
     if isinstance(raw_text, list):
@@ -246,24 +245,18 @@ JSON 结构示例：
 
     json_text = _extract_json_object(str(raw_text))
     if json_text is None:
-        print(
-            "[trip_planner_agent] 未能从模型返回中提取 JSON。"
-            f"response_length={len(str(raw_text))}"
-        )
+        logger.warning("未能从模型返回中提取 JSON。response_length=%s", len(str(raw_text)))
         return None, token_usage
 
     try:
         result = PlannerDraft.model_validate(json.loads(json_text))
     except Exception as exc:
-        print(f"[trip_planner_agent] JSON 解析失败: {type(exc).__name__}: {exc}")
-        print(f"[trip_planner_agent] 已跳过模型原始返回日志。response_length={len(str(raw_text))}")
+        logger.warning("JSON 解析失败: %s: %s", type(exc).__name__, exc)
+        logger.info("已跳过模型原始返回日志。response_length=%s", len(str(raw_text)))
         return None, token_usage
 
     if len(result.days) != day_count:
-        print(
-            "[trip_planner_agent] 结构化结果天数不匹配，"
-            f"expected={day_count}, actual={len(result.days)}"
-        )
+        logger.warning("结构化结果天数不匹配，expected=%s, actual=%s", day_count, len(result.days))
         return None, token_usage
 
     return result, token_usage
@@ -331,9 +324,7 @@ JSON 结构示例：
 }}
 """
 
-    print("[trip_planner_agent] 准备调用大模型进行单日编辑...")
-    print(f"[trip_planner_agent] model = {LLM_MODEL}")
-    print(f"[trip_planner_agent] base_url = {LLM_BASE_URL or '<DEFAULT>'}")
+    logger.info("准备调用大模型进行单日编辑：model=%s base_url=%s", LLM_MODEL, LLM_BASE_URL or '<DEFAULT>')
 
     try:
         response = llm.invoke(
@@ -343,11 +334,11 @@ JSON 结构示例：
             ]
         )
     except Exception as exc:
-        print(f"[trip_planner_agent] 单日编辑调用失败: {type(exc).__name__}: {exc}")
+        logger.warning("单日编辑调用失败: %s: %s", type(exc).__name__, exc)
         return None, empty_usage
 
     token_usage = _extract_token_usage(response)
-    print(f"[trip_planner_agent] 单日编辑调用完成。token: prompt={token_usage['prompt_tokens']}, completion={token_usage['completion_tokens']}")
+    logger.info("单日编辑调用完成。token: prompt=%s, completion=%s", token_usage['prompt_tokens'], token_usage['completion_tokens'])
 
     raw_text = getattr(response, "content", "")
     if isinstance(raw_text, list):

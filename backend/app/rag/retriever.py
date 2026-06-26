@@ -134,7 +134,7 @@ def _rerank_with_dashscope(
     """调用 DashScope qwen3-rerank 模型做语义重排序。返回 (scored, token_usage)。"""
     empty_usage = {"prompt_tokens": 0, "completion_tokens": 0}
     if not LLM_API_KEY or not chunks:
-        print("[rerank] skip qwen3-rerank: missing LLM_API_KEY or empty chunks")
+        logger.info("skip qwen3-rerank: missing LLM_API_KEY or empty chunks")
         return None, empty_usage
 
     # 过滤已知噪声片段，避免浪费 rerank 名额
@@ -143,7 +143,7 @@ def _rerank_with_dashscope(
         if chunk.get("title", "") not in _NOISE_TITLES
     ]
     if not filtered:
-        print("[rerank] skip qwen3-rerank: all chunks are noise")
+        logger.info("skip qwen3-rerank: all chunks are noise")
         return None, empty_usage
 
     original_indices = [i for i, _ in filtered]
@@ -168,9 +168,9 @@ def _rerank_with_dashscope(
     }
 
     try:
-        print(
-            f"[rerank] calling qwen3-rerank: query_length={len(query)}, "
-            f"candidate_count={len(clean_chunks)}, top_k={top_k}"
+        logger.info(
+            "calling qwen3-rerank: query_length=%s, candidate_count=%s, top_k=%s",
+            len(query), len(clean_chunks), top_k,
         )
         with httpx.Client(timeout=30) as client:
             response = client.post(
@@ -181,13 +181,8 @@ def _rerank_with_dashscope(
                     "Content-Type": "application/json",
                 },
             )
-            print(f"[rerank] qwen3-rerank status_code={response.status_code}")
+            logger.warning("qwen3-rerank status_code=%s", response.status_code)
             if response.status_code != 200:
-                print(
-                    "[rerank] qwen3-rerank non-200 response: "
-                    f"status_code={response.status_code}, "
-                    f"response_length={len(response.text)}"
-                )
                 logger.warning(
                     "dashscope rerank HTTP %d; response_length=%d",
                     response.status_code,
@@ -199,17 +194,12 @@ def _rerank_with_dashscope(
         # 只提取接口返回的官方 token usage；没有 usage 时保持 0，不做估算。
         token_usage, has_official_usage = _extract_rerank_token_usage(data)
         usage_source = "api" if has_official_usage else "none"
-        print(
-            "[rerank] qwen3-rerank token: "
-            f"prompt={token_usage['prompt_tokens']}, "
-            f"completion={token_usage['completion_tokens']}, "
-            f"source={usage_source}"
+        logger.info(
+            "qwen3-rerank token: prompt=%s, completion=%s, source=%s",
+            token_usage['prompt_tokens'], token_usage['completion_tokens'], usage_source,
         )
         if not has_official_usage:
-            print(
-                "[rerank] qwen3-rerank response has no official usage field; "
-                "precise token count is unavailable from this response."
-            )
+            logger.info("qwen3-rerank response has no official usage field")
         if token_usage["prompt_tokens"] or token_usage["completion_tokens"]:
             logger.info(
                 "dashscope rerank token: prompt=%d, completion=%d",
@@ -221,10 +211,6 @@ def _rerank_with_dashscope(
         results = data.get("output", {}).get("results", []) or data.get("results", [])
         if not results:
             response_length = len(json.dumps(data, ensure_ascii=False))
-            print(
-                "[rerank] qwen3-rerank empty results, "
-                f"response_length={response_length}"
-            )
             logger.warning(
                 "dashscope rerank empty results; response_length=%d",
                 response_length,
@@ -237,12 +223,12 @@ def _rerank_with_dashscope(
             if int(item.get("index", 0)) < len(original_indices)
         ]
         scored.sort(key=lambda x: x[0], reverse=True)
-        print(f"[rerank] qwen3-rerank success: results={len(scored)}")
+        logger.info("qwen3-rerank success: results=%s", len(scored))
         logger.info("dashscope rerank: query_length=%d, results=%d", len(query), len(scored))
         return scored, token_usage
 
     except Exception as exc:
-        print(f"[rerank] qwen3-rerank failed: {type(exc).__name__}")
+        logger.warning("qwen3-rerank failed: %s", type(exc).__name__)
         logger.warning(
             "dashscope rerank failed: %s, falling back to rule-based",
             type(exc).__name__,
@@ -299,7 +285,7 @@ def rerank_guide_chunks(
     # 优先尝试 DashScope Cross-encoder Rerank
     dashscope_results, rerank_token_usage = _rerank_with_dashscope(query, matched_chunks, top_k)
     if dashscope_results:
-        print("[rerank] using qwen3-rerank results")
+        logger.info("using qwen3-rerank results")
         # 写入缓存：只存索引和分数，不重复存文本
         cache_value = [
             {"i": idx, "s": round(score, 4)}
@@ -317,7 +303,7 @@ def rerank_guide_chunks(
         return reranked[:top_k], rerank_token_usage
 
     # fallback 到规则级 Rerank
-    print("[rerank] qwen3-rerank unavailable, using rule-based rerank")
+    logger.info("qwen3-rerank unavailable, using rule-based rerank")
     logger.info("rerank_guide_chunks: using rule-based rerank")
     scored_chunks: list[tuple[int, int, dict[str, str]]] = []
     for index, chunk in enumerate(matched_chunks):

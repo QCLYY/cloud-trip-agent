@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from hashlib import md5
 
@@ -14,6 +15,8 @@ from app.config import (
     LLM_API_KEY,
     LLM_BASE_URL,
 )
+
+logger = logging.getLogger(__name__)
 
 
 DATA_DIR = BACKEND_DIR / "data"
@@ -176,24 +179,24 @@ def _embed_query_with_usage(query: str) -> tuple[list[float] | None, dict[str, i
             items = data.get("data") or []
             if items and "embedding" in items[0]:
                 usage = _extract_embedding_token_usage(data)
-                print(
-                    "[embedding] query embedding token: "
-                    f"prompt={usage['prompt_tokens']}, completion=0, source=api"
+                logger.info(
+                    "query embedding token: prompt=%s, completion=0, source=api",
+                    usage['prompt_tokens'],
                 )
                 return items[0]["embedding"], usage
-            print(f"[embedding] embeddings response missing vector: {response.text[:500]}")
+            logger.warning("embeddings response missing vector: %s", response.text[:500])
         else:
-            print(
-                "[embedding] embeddings API failed: "
-                f"status_code={response.status_code}, response={response.text[:500]}"
+            logger.warning(
+                "embeddings API failed: status_code=%s, response=%s",
+                response.status_code, response.text[:500],
             )
     except Exception as exc:
-        print(f"[embedding] embeddings API failed: {type(exc).__name__}: {exc}")
+        logger.warning("embeddings API failed: %s: %s", type(exc).__name__, exc)
 
     embeddings = _build_embeddings()
     if embeddings is None:
         return None, empty_usage
-    print("[embedding] fallback to LangChain embed_query; official token usage unavailable")
+    logger.info("fallback to LangChain embed_query")
     return embeddings.embed_query(query), empty_usage
 
 
