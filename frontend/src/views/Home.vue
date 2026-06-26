@@ -194,11 +194,6 @@ async function handleSubmit() {
       />
     </div>
 
-    <div class="planner-card">
-      <div class="section-title">
-        <span class="section-title__icon">🌐</span>
-    </div>
-
     <div class="submit-panel">
       <button
         class="submit-panel__button"
