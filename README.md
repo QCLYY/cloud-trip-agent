@@ -1,8 +1,8 @@
 # 云程智绘图（Cloud Trip Agent）
 
-云程智绘图是一个面向国内旅行场景的智能行程规划系统。项目以 Vue 3 + TypeScript 前端、FastAPI 后端、SQLite、Redis、ChromaDB、本地攻略数据、高德地图、天气服务、Tavily 受限检索和 LangGraph 风格多 Agent 编排为核心，提供从旅行需求填写、候选行程生成、自然语言修改、版本管理、长期记忆到 PDF 导出的完整作品展示链路。
+云程智绘图是一个面向国内旅行场景的智能行程规划系统。项目以 Vue 3 + TypeScript 前端、FastAPI 后端、SQLite、Redis、ChromaDB、本地攻略数据、高德地图、天气服务、Tavily 受限检索、LangGraph 风格多 Agent 编排和 LLM 多 Agent 委派对话为核心，提供从旅行需求填写、候选行程生成、自然语言修改、版本管理、长期记忆到 PDF 导出的完整展示链路。
 
-本项目是求职作品展示项目，不提供自动预订、自动支付、第三方网站登录、携程实时网页查询、12306 查询或多平台实时比价能力。
+本项目是求职作品展示项目，不提供自动预订、自动支付、第三方网站登录、12306 查询或多平台实时比价能力。价格信息标注"仅供参考"，不做实时价格承诺。
 
 ## 功能概览
 
@@ -29,12 +29,9 @@
 
 第一版明确不支持：
 
-- 自动预订型 Browser 自动化。
-- Playwright 登录、下单、支付或绕过验证码。
 - 携程实时库存、最终结算价或可预订结果查询。
 - 第三方网站自动登录。
-- 自动预订。
-- 自动支付。
+- 自动预订、自动支付。
 - 自动退票、改签和取消。
 - 自驾路线规划。
 - 12306 查询。
@@ -165,8 +162,10 @@ cp backend/.env.example backend/.env
 ```env
 LLM_PROVIDER=openai_compatible
 LLM_API_KEY=your_api_key_here
-LLM_MODEL=qwen-max
-LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+# ModelScope 免费推理 API：https://api-inference.modelscope.cn/v1/
+# 推荐模型：deepseek-ai/DeepSeek-V4-Flash 或 moonshotai/Kimi-K2.5
+LLM_MODEL=deepseek-ai/DeepSeek-V4-Flash
+LLM_BASE_URL=https://api-inference.modelscope.cn/v1/
 
 JWT_SECRET_KEY=change_me_to_a_long_random_secret
 JWT_ALGORITHM=HS256
@@ -182,7 +181,9 @@ REDIS_URL=redis://127.0.0.1:6379/0
 
 AMAP_API_KEY=your_amap_api_key
 AMAP_BASE_URL=https://restapi.amap.com/v3
-ENABLE_AMAP_ENRICHMENT=false
+AMAP_DEFAULT_CITY=
+AMAP_TIMEOUT_SECONDS=20
+ENABLE_AMAP_ENRICHMENT=true
 
 TAVILY_API_KEY=
 TAVILY_API_URL=https://api.tavily.com/search
@@ -291,23 +292,21 @@ python scripts/ingest_data.py
 
 Docker 场景下，SQLite 与 ChromaDB 持久化在后端数据库卷中；镜像内攻略文件保留在 `/app/data`，不会被 `backend_data:/app/data` 遮挡。
 
-## Browser 价格观察
+## Edge 浏览器辅助浏览
 
-Browser 价格观察默认关闭。启用后，用户可在新建行程页填写起始城市、目的地和出行日期，后端会使用 Playwright 自动打开携程火车、机票、度假和首页入口，尝试填入城市日期并点击搜索，再读取当前页面可见文本并抽取价格。用户也可以额外填写公开网页 URL 作为补充观察来源。结果会以 `browser_observed` 来源写入行程来源记录，并在可识别时回填酒店、交通或门票的参考价格。
+在结果页点击航班、高铁、酒店或度假按钮，后端会启动本地 MS Edge 浏览器并导航到携程对应页面，自动传入目的地和日期参数。浏览器作为独立进程运行，不受后端生命周期影响，用户手动查看价格后自行关闭窗口。
 
-`backend/.env` 示例：
+- 浏览器窗口由用户手动关闭。
+- 不做自动抓取、不提取 DOM 价格、不自动登录。
+- 价格请以页面实际显示为准，仅供出行参考。
+
+`backend/.env` 可选配置：
 
 ```env
-BROWSER_ENABLED=true
-BROWSER_HEADLESS=true
-BROWSER_ALLOWED_DOMAINS=*
+BROWSER_CHANNEL=msedge
+MSEDGE_PATH=C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe
 BROWSER_TIMEOUT_SECONDS=30
-BROWSER_MAX_URLS=4
-BROWSER_MAX_PRICE_ITEMS=8
-BROWSER_HUMAN_WAIT_SECONDS=60
 ```
-
-边界说明：该能力不自动登录第三方网站、不绕过验证码、不点击预订或支付；页面观察价格不代表实时库存、可预订结果或最终结算价。本地调试时可设置 `BROWSER_HEADLESS=false`，遇到登录或验证码时浏览器窗口会等待 `BROWSER_HUMAN_WAIT_SECONDS`，由用户手动处理后继续读取页面；Docker 默认 headless，只会返回需要人工处理的状态并保留估算价格。
 
 ## 核心 API
 
@@ -334,6 +333,7 @@ BROWSER_HUMAN_WAIT_SECONDS=60
 | `POST` | `/assistant/message` | AI 顾问多轮对话 |
 | `GET` | `/assistant/trips/{trip_id}/messages` | 查询当前行程对话历史 |
 | `DELETE` | `/assistant/trips/{trip_id}/messages` | 清空当前行程对话 |
+| `POST` | `/browser/navigate` | Edge 浏览器辅助导航 |
 | `GET` | `/weather/forecast` | 天气查询 |
 | `GET` | `/export/{trip_id}/markdown` | 导出 Markdown |
 | `GET` | `/export/{trip_id}/pdf` | 导出 PDF |
@@ -383,17 +383,16 @@ git diff --check
 
 ## 推荐演示流程
 
-1. 启动 Docker 服务。
-2. 打开 `http://localhost`。
-3. 注册并登录。
-4. 创建国内旅行需求。
-5. 生成 2 个候选方案。
-6. 查看当前结果、数据来源和 Agent 状态。
-7. 使用 AI 顾问提问，例如“解释一下这个行程为什么这样安排”。
-8. 让 AI 顾问进行局部修改，例如“第二天安排得轻松一点”。
-9. 保存行程并查看版本。
-10. 打开长期记忆，确认保存一条稳定偏好。
-11. 导出 Markdown 或 PDF。
+1. 启动前后端服务（Docker 或本地开发）。
+2. 打开前端页面，注册并登录。
+3. 创建国内旅行需求，填写目的地、日期、预算等。
+4. 生成行程，查看预算明细、景点地图、天气信息。
+5. 使用 AI 顾问进行多轮对话：查询预算、解释方案、修改行程。
+6. 切换候选方案（经济优先 / 均衡推荐）。
+7. 点击 Edge 辅助浏览按钮，查看携程实时参考价格。
+8. 保存行程，查看版本历史。
+9. 恢复历史版本，确认数据正确。
+10. 导出 Markdown 或 PDF。
 
 ## 许可证
 
