@@ -41,12 +41,12 @@ const isSourcesMode = computed(() => viewMode.value === "sources");
 const isAgentStatusMode = computed(() => viewMode.value === "agent-status");
 
 const sourceTypeLabels: Record<SourceType, string> = {
-  demo: "本地演示",
-  estimate: "规则估算",
+  demo: "本地演示（仅供参考）",
+  estimate: "规则估算（仅供参考）",
   user_input: "用户录入",
-  tavily: "Tavily 检索",
+  tavily: "Tavily 检索（仅供参考）",
   official_api: "正式 API",
-  browser_observed: "Browser 观察",
+  browser_observed: "Browser 观察（仅供参考）",
 };
 
 function sourceLabel(sourceType?: SourceType | null): string {
@@ -569,6 +569,11 @@ function handleAssistantUpdated(updatedItinerary: Itinerary, versionNumber?: num
           <span>预估总费用</span>
           <strong>¥{{ itinerary.estimated_budget.toFixed(0) }}</strong>
         </div>
+        <div class="budget-disclaimer">
+          <span>以上价格为预估参考价，来源于本地演示、规则估算或外部检索，</span>
+          <strong>非实时价格</strong>
+          <span>，实际消费以现场为准。</span>
+        </div>
       </section>
 
       <section v-if="candidateItineraries.length" class="result-card result-card--full">
@@ -1072,6 +1077,18 @@ function handleAssistantUpdated(updatedItinerary: Itinerary, versionNumber?: num
 
 .budget-total strong {
   font-size: 28px;
+}
+
+.budget-disclaimer {
+  margin-top: 10px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(245, 158, 11, 0.10);
+  border: 1px solid rgba(245, 158, 11, 0.22);
+  color: #92400e;
+  font-size: 13px;
+  line-height: 1.7;
+  text-align: center;
 }
 
 .candidate-grid,

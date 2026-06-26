@@ -20,14 +20,15 @@ TECHNICAL_EXPORT_KEYWORDS = (
 )
 
 SOURCE_TYPE_LABELS = {
-    "demo": "本地演示数据",
-    "estimate": "规则估算",
+    "demo": "本地演示数据（仅供参考）",
+    "estimate": "规则估算（仅供参考）",
     "user_input": "用户录入",
-    "tavily": "Tavily 外部检索",
+    "tavily": "Tavily 外部检索（仅供参考）",
     "official_api": "正式 API",
+    "browser_observed": "Browser 页面观察（仅供参考）",
 }
 
-NON_REALTIME_SOURCE_TYPES = {"demo", "estimate", "tavily"}
+NON_REALTIME_SOURCE_TYPES = {"demo", "estimate", "tavily", "browser_observed"}
 
 
 def _safe_text(value: object) -> str:
@@ -85,8 +86,9 @@ def _render_source_record_lines(itinerary: Itinerary) -> list[str]:
     )
     if has_non_realtime:
         lines.append(
-            "- 说明：本地演示数据、规则估算和 Tavily 外部检索不代表实时价格、"
-            "实时库存或可预订结果。"
+            "- 重要说明：本行程中的价格来源于本地演示数据、规则估算、Tavily 外部检索"
+            "或 Browser 页面观察，均非实时价格，不代表示踪库存或可预订结果，"
+            "仅供行程规划参考，实际消费以现场价格为准。"
         )
     return lines
 
@@ -100,6 +102,7 @@ def _render_budget_lines(itinerary: Itinerary) -> list[str]:
         f"- 门票：{budget.tickets:.2f} 元",
         f"- 其他：{budget.other:.2f} 元",
         f"- 总计：{budget.total:.2f} 元",
+        "- 注意：以上价格为预估参考价，非实时价格，实际消费以现场为准。",
     ]
 
 
