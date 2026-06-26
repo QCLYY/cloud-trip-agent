@@ -628,6 +628,36 @@ def edit_trip_itinerary(request: TripEditRequest) -> Itinerary:
 
             llm_edit_applied = True
         else:
+            # ── Rule-based fallback for common edit patterns ─────────────────
+            import re as _re
+
+            # Pattern: 将/把 X 换成/改为/替换为 Y
+            _swap = _re.search(
+                r"(?:将|把)\s*(.+?)\s*(?:换成|改为|替换为|改成|换为)\s*(.+)",
+                request.user_instruction,
+            )
+            if _swap and target_day.spots:
+                _from = _swap.group(1).strip()
+                _to = _swap.group(2).strip().rstrip("。！，,.")
+                _replaced = False
+                # Try to find the source spot on the target day first, then any day
+                for _day in [target_day] + [
+                    d for d in updated_itinerary.days if d is not target_day
+                ]:
+                    for _spot in _day.spots:
+                        if _from in _spot.name or _spot.name in _from:
+                            _spot.name = _to
+                            _spot.description = f"已将 {_from} 替换为 {_to}"
+                            _spot.address = None
+                            _spot.latitude = None
+                            _spot.longitude = None
+                            _spot.poi_id = None
+                            _replaced = True
+                            break
+                    if _replaced:
+                        break
+                llm_edit_applied = _replaced
+
             if "轻松" in request.user_instruction:
                 target_day.theme = f"{target_day.theme}（已调整为更轻松）"
                 target_day.notes.append("已根据用户要求把节奏调整得更轻松。")
