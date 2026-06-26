@@ -41,9 +41,9 @@ class DayEditDraft(BaseModel):
     theme: str = Field(..., description="编辑后的当天主题")
     spot_name: str = Field(..., description="编辑后的主要景点名称")
     spot_description: str = Field(..., description="编辑后的景点说明")
-    meal_name: str = Field(..., description="编辑后的餐饮名称")
-    meal_notes: str = Field(..., description="编辑后的餐饮说明")
-    daily_note: str = Field(..., description="编辑后的当天备注")
+    meal_name: str = Field(default="", description="编辑后的餐饮名称")
+    meal_notes: str = Field(default="", description="编辑后的餐饮说明")
+    daily_note: str = Field(default="", description="编辑后的当天备注")
 
 
 def _normalize_day_edit_payload(payload: dict) -> dict:

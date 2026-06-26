@@ -583,6 +583,28 @@ def generate_trip_itinerary(request: TripRequest, user_id: int | None = None) ->
         return attach_candidate_itineraries(_generate_trip_itinerary_legacy(request), include_experience=True)
 
 
+def _find_target_spot_index(spots: list, user_instruction: str) -> int:
+    """Try to find which spot the user wants to edit by matching spot names in the instruction.
+
+    Returns the index of the matched spot, or 0 if no match (backward compatible default).
+    """
+    import re as _re
+
+    for i, spot in enumerate(spots):
+        name = getattr(spot, "name", "") or ""
+        if name and len(name) >= 2 and name in user_instruction:
+            return i
+
+    # Try partial match — any 2+ char substring of the spot name appears in instruction
+    for i, spot in enumerate(spots):
+        name = getattr(spot, "name", "") or ""
+        for j in range(len(name) - 1):
+            if name[j:j+2] in user_instruction:
+                return i
+
+    return 0
+
+
 def edit_trip_itinerary(request: TripEditRequest) -> Itinerary:
     """优先使用 LLM 编辑单日行程，失败时回退到规则编辑。"""
     updated_itinerary = request.current_itinerary.model_copy(deep=True)
@@ -607,16 +629,18 @@ def edit_trip_itinerary(request: TripEditRequest) -> Itinerary:
         if day_edit_draft is not None:
             target_day.theme = day_edit_draft.theme
             if target_day.spots:
-                target_day.spots[0].name = day_edit_draft.spot_name
-                target_day.spots[0].description = day_edit_draft.spot_description
-                target_day.spots[0].estimated_cost = _estimate_ticket_cost(
+                spot_idx = _find_target_spot_index(target_day.spots, request.user_instruction)
+                target_spot = target_day.spots[spot_idx]
+                target_spot.name = day_edit_draft.spot_name
+                target_spot.description = day_edit_draft.spot_description
+                target_spot.estimated_cost = _estimate_ticket_cost(
                     day_edit_draft.spot_name,
                     day_edit_draft.spot_description,
                 )
-                target_day.spots[0].address = None
-                target_day.spots[0].latitude = None
-                target_day.spots[0].longitude = None
-                target_day.spots[0].poi_id = None
+                target_spot.address = None
+                target_spot.latitude = None
+                target_spot.longitude = None
+                target_spot.poi_id = None
             if target_day.meals:
                 target_day.meals[0].name = day_edit_draft.meal_name
                 target_day.meals[0].notes = day_edit_draft.meal_notes
