@@ -3,13 +3,11 @@ import { message } from "ant-design-vue";
 import { onMounted, ref, watch } from "vue";
 
 import {
-  createConfirmation,
   deleteTrip,
   getTripDetail,
   listTripVersions,
   listTrips,
   restoreTripVersion,
-  updateConfirmation,
 } from "../services/api";
 import type { Itinerary, TripSummaryItem, TripVersionSummary } from "../types";
 
@@ -99,12 +97,6 @@ async function restoreVersion(tripId: string, versionNumber: number) {
     return;
   }
   try {
-    const confirmation = await createConfirmation({
-      trip_id: tripId,
-      confirmation_type: "restore_version",
-      payload: { version_number: versionNumber },
-    });
-    await updateConfirmation(confirmation.id, "confirmed");
     const response = await restoreTripVersion(tripId, versionNumber);
     emit("openTrip", response.itinerary);
     message.success(`已恢复版本 ${versionNumber}，并生成新版本 ${response.new_version_number}。`);
